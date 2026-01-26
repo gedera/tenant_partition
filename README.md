@@ -1,5 +1,20 @@
 # ActivePartition
 
+```ruby
+# config/initializers/active_partition_notifications.rb
+ActiveSupport::Notifications.subscribe(/\.active_partition/) do |name, start, finish, id, payload|
+  duration = (finish - start) * 1000 # milisegundos
+
+  case name
+  when "populate.active_partition"
+    Rails.logger.info "[ActivePartition] Migrados #{payload[:count]} registros para #{payload[:value]} en #{duration.round(2)}ms"
+  when "create.active_partition"
+    Rails.logger.info "[ActivePartition] Partición creada para el tenant: #{payload[:value]}"
+  end
+end
+
+```
+
 TODO: Delete this and the text below, and describe your gem
 
 Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/active_partition`. To experiment with that code, run `bin/console` for an interactive prompt.
