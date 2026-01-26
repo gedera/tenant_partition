@@ -88,23 +88,36 @@ Crea modelos que hereden de `ActivePartition::Base` para gestionar la creación/
 # app/models/partition/message.rb
 module Partition
   class Message < ActivePartition::Base
-    # Usa :isp_id (global)
+    # Usa :isp_id (global) e infiere nombres de tabla
   end
 end
 ```
 
-**Modelo con Clave Personalizada:**
+### 3. Personalización Avanzada (Convenciones)
+
+Si tienes una base de datos legacy o no sigues las convenciones de Rails, puedes sobrescribir manualmente los nombres de las tablas y prefijos.
+
 ```ruby
-# app/models/partition/log.rb
+# app/models/partition/legacy_data.rb
 module Partition
-  class Log < ActivePartition::Base
-    # Sobrescribe la clave global para este modelo
-    self.partition_key = :region_code
+  class LegacyData < ActivePartition::Base
+    # Sobrescribir la clave de partición
+    self.partition_key = :client_code
+
+    # Sobrescribir el nombre de la tabla padre
+    self.parent_table = "tbl_legacy_data"
+
+    # Sobrescribir el prefijo de las particiones hijas
+    # Las tablas se crearán como: "data_partition_CLI001", "data_partition_CLI002"...
+    self.prefix = "data_partition"
+
+    # Sobrescribir la tabla default
+    self.default_table = "tbl_legacy_data_fallback"
   end
 end
 ```
 
-### 3. Integración en Modelos de Negocio (Concerns)
+### 4. Integración en Modelos de Negocio (Concerns)
 
 Para tus modelos normales (`ApplicationRecord`), incluye el concern `Partitioned` para agregar scopes dinámicos.
 
@@ -117,7 +130,7 @@ end
 Message.for_partition("uuid-tenant-123").all
 ```
 
-### 4. Seguridad en Controladores (Concerns)
+### 5. Seguridad en Controladores (Concerns)
 
 Protege tus endpoints API asegurando que siempre reciban el ID del tenant en el header configurado.
 
@@ -137,7 +150,7 @@ class ApiController < ActionController::API
 end
 ```
 
-### 5. Gestión de Particiones (Infraestructura)
+### 6. Gestión de Particiones (Infraestructura)
 
 Puedes crear, buscar y eliminar particiones físicamente:
 
@@ -178,7 +191,7 @@ Suscríbete a los eventos para enviar métricas a tu sistema de monitoreo.
 # config/initializers/active_partition_notifications.rb
 ActiveSupport::Notifications.subscribe(/active_partition/) do |name, start, finish, id, payload|
   duration = (finish - start) * 1000
-
+  
   case name
   when "create.active_partition"
     Rails.logger.info "Partición creada: #{payload[:table]} (Key: #{payload[:partition_key]}) -> #{payload[:value]}"
