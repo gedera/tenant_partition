@@ -11,6 +11,8 @@ require_relative "active_partition/version"
 require_relative "active_partition/configuration"
 require_relative "active_partition/safety_guard"
 require_relative "active_partition/base"
+require_relative "active_partition/concerns/partitioned"
+require_relative "active_partition/concerns/controller"
 
 # Integración con Ruby on Rails
 require_relative "active_partition/railtie" if defined?(Rails)
