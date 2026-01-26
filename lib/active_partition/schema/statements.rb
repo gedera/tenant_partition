@@ -8,38 +8,29 @@ module ActivePartition
       # Crea una tabla padre particionada por lista y genera automáticamente
       # su partición por defecto (DEFAULT).
       #
-      # La columna definida en la configuración global como +partition_key+
-      # se inyectará automáticamente si no se define explícitamente en el bloque.
+      # La columna de partición se inyectará automáticamente.
       #
       # @param table_name [Symbol, String] El nombre de la tabla a crear.
-      # @param options [Hash] Opciones estándar de ActiveRecord +create_table+.
+      # @param options [Hash] Opciones estándar + :partition_key opcional.
       # @yield [t] Bloque para definir las columnas de la tabla.
       #
-      # @example Crear un microservicio de mensajería con soporte Multi-tenant
-      #   # config/initializers/active_partition.rb -> config.partition_key = :isp_id
+      # @example Crear tabla usando configuración global
+      #   create_partitioned_table :messages do |t| ... end
       #
-      #   create_partitioned_table :messages do |t|
-      #     t.uuid :chat_id, null: false
-      #     t.jsonb :payload, default: {}
-      #     t.string :state, default: 'pending'
-      #     t.timestamps
-      #   end
-      #
-      #   # Esto ejecutará en SQL:
-      #   # 1. CREATE TABLE messages (..., isp_id string) PARTITION BY LIST (isp_id);
-      #   # 2. CREATE TABLE messages_default PARTITION OF messages DEFAULT;
+      # @example Crear tabla con key personalizada
+      #   create_partitioned_table :logs, partition_key: :region_code do |t| ... end
       #
       # @return [void]
-      # @raise [ActivePartition::Error] Si no se ha configurado la clave de partición.
+      # @raise [ActivePartition::Error] Si no se ha configurado ninguna clave.
       def create_partitioned_table(table_name, **options, &block)
-        key = ActivePartition.configuration&.partition_key
+        # Prioridad: 1. Opción pasada al método, 2. Configuración global
+        key = options.delete(:partition_key) || ActivePartition.configuration&.partition_key
 
         unless key
-          raise ActivePartition::Error, "Debe configurar 'partition_key' en el inicializador antes de ejecutar migraciones."
+          raise ActivePartition::Error, "Debe configurar 'partition_key' globalmente o pasarlo como opción."
         end
 
         # Inyectamos la cláusula PARTITION BY en las opciones nativas de Postgres
-        # Forzamos que el partition_key sea parte de la definición primaria
         options[:options] = "PARTITION BY LIST (#{key})"
         options[:id] = :uuid unless options.key?(:id)
 
@@ -47,6 +38,7 @@ module ActivePartition
         create_table(table_name, **options) do |t|
           # Ejecutamos las definiciones del usuario
           block.call(t)
+
           # Inyección automática del atributo de partición si no existe
           unless t.columns.any? { |c| c.name == key.to_s }
             t.column key, :string, null: false
@@ -54,7 +46,6 @@ module ActivePartition
         end
 
         # 2. Crear la partición DEFAULT
-        # El nombre se infiere siguiendo la convención de ActivePartition::Base
         default_name = "#{table_name}_default"
         execute <<-SQL.squish
           CREATE TABLE IF NOT EXISTS #{default_name}
@@ -63,8 +54,6 @@ module ActivePartition
       end
 
       # Elimina una tabla particionada y su tabla por defecto asociada.
-      # Utiliza CASCADE para asegurar que todas las particiones hijas sean removidas.
-      #
       # @param table_name [Symbol, String] Nombre de la tabla padre.
       # @return [void]
       def drop_partitioned_table(table_name)

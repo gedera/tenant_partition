@@ -9,6 +9,8 @@ module ActivePartition
   # @abstract Hereda de esta clase para definir un recurso de partición.
   # @example
   #   class Partition::Chat < ActivePartition::Base
+  #     # Opcional: Sobrescribir la clave global
+  #     self.partition_key = :region_code
   #   end
   class Base
     include ActiveModel::Model
@@ -21,28 +23,42 @@ module ActivePartition
     # @return [void]
     def self.inherited(subclass)
       super
+      # Intentamos definir el atributo por defecto si existe configuración global
       key = ActivePartition.configuration&.partition_key
       subclass.attribute key if key
     end
 
     class << self
+      attr_writer :parent_table, :prefix, :default_table
+
+      # Permite inyectar una clave de partición personalizada por clase
+      attr_writer :partition_key
+
       # @return [String] Nombre de la tabla padre en PostgreSQL.
-      attr_writer :parent_table
-
-      # @return [String] Prefijo para las tablas particionadas (ej: "chats_isp").
-      attr_writer :prefix
-
-      # @return [String] Nombre de la tabla por defecto (ej: "chats_default").
-      attr_writer :default_table
-
-      # Infiere el nombre de la tabla padre basándose en el nombre de la clase.
-      # @return [String]
       def parent_table
         @parent_table ||= name.demodulize.underscore.pluralize
       end
 
+      # @return [Symbol] El nombre de la columna configurada como discriminador.
+      # Prioridad:
+      # 1. Clave definida explícitamente en la clase (self.partition_key = :xyz)
+      # 2. Clave global de configuración
+      # @raise [ActivePartition::Error] Si no hay ninguna clave configurada.
+      def partition_key
+        @partition_key ||= ActivePartition.configuration&.partition_key ||
+          raise(ActivePartition::Error, "Clave de partición no configurada.")
+      end
+
+      # Setter personalizado para definir el atributo en ActiveModel al momento de asignar.
+      # @param value [Symbol] El nombre de la nueva columna de partición.
+      def partition_key=(value)
+        @partition_key = value
+        # Define el atributo en el modelo automáticamente para que ActiveModel lo reconozca
+        attribute value
+      end
+
       # Infiere el prefijo para las particiones basado en el nombre de la tabla y la clave.
-      # @return [String]
+      # @return [String] Ej: "messages_isp" o "logs_region"
       def prefix
         @prefix ||= "#{parent_table}_#{partition_key.to_s.gsub('_id', '')}"
       end
@@ -51,13 +67,6 @@ module ActivePartition
       # @return [String]
       def default_table
         @default_table ||= "#{parent_table}_default"
-      end
-
-      # @return [Symbol] El nombre de la columna configurada como discriminador de partición.
-      # @raise [ActivePartition::Error] Si no se ha configurado la clave en el inicializador.
-      def partition_key
-        ActivePartition.configuration&.partition_key ||
-          raise(ActivePartition::Error, "Clave de partición no configurada.")
       end
 
       # @return [ActiveRecord::ConnectionAdapters::AbstractAdapter]
@@ -72,6 +81,7 @@ module ActivePartition
       # @param value [Object] El valor del ID para el cual crear la partición.
       # @return [ActivePartition::Base] Una nueva instancia del recurso.
       def create(value)
+        # Usamos el método partition_key para asegurar que leemos el correcto (local o global)
         payload = { partition_key: partition_key, value: value, table: parent_table }
 
         ActiveSupport::Notifications.instrument("create.active_partition", payload) do
@@ -136,11 +146,12 @@ module ActivePartition
     def populate_from_default(batch_size: 5000)
       return 0 unless persisted?
 
-      payload = {
-        partition_key: self.class.partition_key,
-        value: partition_id,
-        parent_table: self.class.parent_table
-      }
+      parent  = self.class.parent_table
+      default = self.class.default_table
+      key     = self.class.partition_key
+      val     = partition_id
+
+      payload = { partition_key: key, value: val, parent_table: parent }
 
       ActiveSupport::Notifications.instrument("populate.active_partition", payload) do |notification_payload|
         total_moved = 0
@@ -167,6 +178,8 @@ module ActivePartition
           total_moved += batch_count
           break if batch_count < batch_size
         end
+
+        notification_payload[:count] = total_moved
         total_moved
       end
     end
