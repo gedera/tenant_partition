@@ -43,7 +43,7 @@ ActivePartition.configure do |config|
   config.partition_key = :isp_id
 
   # 2. Nombre exacto del Header HTTP que traerá el ID del tenant.
-  # La estrategia de seguridad del controlador es ESTRICTA: solo leerá de este header.
+  # La estrategia de seguridad por defecto del controlador es ESTRICTA: solo leerá de este header.
   config.header_name = 'X-Tenant-ID'
 end
 ```
@@ -132,20 +132,42 @@ Message.for_partition("uuid-tenant-123").all
 
 ### 5. Seguridad en Controladores (Concerns)
 
-Protege tus endpoints API asegurando que siempre reciban el ID del tenant en el header configurado.
+Protege tus endpoints API asegurando que siempre reciban el ID del tenant.
+
+#### Estrategia por Defecto (Headers)
+La gema buscará automáticamente el header configurado (`X-Tenant-ID`).
 
 ```ruby
 class ApiController < ActionController::API
   include ActivePartition::Concerns::Controller
 
-  # 1. Valida que el header (ej: X-Tenant-ID) esté presente.
-  # 2. Devuelve 400 Bad Request si falta.
+  # Valida presencia del ID. Devuelve 400 Bad Request si falta.
   before_action :require_partition_key!
 
   def index
-    # 'current_partition_id' devuelve el valor seguro del Header
+    # 'current_partition_id' devuelve el valor del Header
     @messages = Message.for_partition(current_partition_id).all
     render json: @messages
+  end
+end
+```
+
+#### Personalización de la Estrategia (Override)
+Si tu API no es REST tradicional o necesitas extraer el ID de otra fuente (JWT, Subdominios, Cookies), simplemente sobrescribe el método `current_partition_id`.
+
+```ruby
+class GraphqlController < ApplicationController
+  include ActivePartition::Concerns::Controller
+
+  # El filtro 'require_partition_key!' usará tu método personalizado
+  before_action :require_partition_key!
+
+  private
+
+  # Sobrescribimos la lógica por defecto de la gema
+  def current_partition_id
+    # Ejemplo: Extraer desde un token JWT decodificado en lugar de headers crudos
+    @current_partition_id ||= current_user_token.payload['tenant_uuid']
   end
 end
 ```
@@ -191,7 +213,7 @@ Suscríbete a los eventos para enviar métricas a tu sistema de monitoreo.
 # config/initializers/active_partition_notifications.rb
 ActiveSupport::Notifications.subscribe(/active_partition/) do |name, start, finish, id, payload|
   duration = (finish - start) * 1000
-  
+
   case name
   when "create.active_partition"
     Rails.logger.info "Partición creada: #{payload[:table]} (Key: #{payload[:partition_key]}) -> #{payload[:value]}"
