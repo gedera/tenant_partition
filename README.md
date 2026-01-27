@@ -26,7 +26,7 @@ Específicamente construido para arquitecturas **Multi-tenant**, este framework 
 Agrega esto a tu `Gemfile`:
 
 ```ruby
-gem 'activepartition'
+gem 'tenant_partition'
 ```
 
 Luego ejecuta:

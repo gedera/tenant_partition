@@ -3,7 +3,7 @@
 require_relative "lib/activepartition/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "activepartition"
+  spec.name = "tenant_partition"
   spec.version = ActivePartition::VERSION
   spec.authors = ["gabriel"]
   spec.email = ["gedera@wispro.co"]
