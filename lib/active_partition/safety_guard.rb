@@ -41,7 +41,7 @@ module ActivePartition
       if version < MIN_POSTGRES_VERSION
         raise ActivePartition::Error, "Versión de PostgreSQL insuficiente: Se requiere v#{MIN_POSTGRES_VERSION}+ (detectada: #{version})."
       end
-    rescue ActiveRecord::StatementInvalid
+    rescue ActiveRecord::StatementInvalid, ActiveRecord::ConnectionNotEstablished
       # Si no hay conexión aún, se posterga la validación
     end
   end
