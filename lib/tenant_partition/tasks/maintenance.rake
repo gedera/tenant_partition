@@ -1,7 +1,7 @@
 # lib/tenant_partition/tasks/maintenance.rake
 # frozen_string_literal: true
 
-namespace :active_partition do
+namespace :tenant_partition do
   desc "Audita todas las tablas DEFAULT definidas en TenantPartition"
   task audit: :environment do
     TenantPartition.audit

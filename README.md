@@ -159,7 +159,7 @@ report = TenantPartition.audit
 
 O vía Rake task:
 ```bash
-bundle exec rails active_partition:audit
+bundle exec rails tenant_partition:audit
 ```
 
 ### Limpieza (Cleanup)
@@ -173,7 +173,7 @@ TenantPartition.cleanup!
 
 O vía Rake task:
 ```bash
-bundle exec rails active_partition:cleanup
+bundle exec rails tenant_partition:cleanup
 ```
 
 ## 📊 Observabilidad
@@ -186,9 +186,9 @@ ActiveSupport::Notifications.subscribe(/tenant_partition/) do |name, start, fini
   duration = (finish - start) * 1000
 
   case name
-  when "create.active_partition"
+  when "create.tenant_partition"
     Rails.logger.info "📦 Partición creada: #{payload[:table]} para #{payload[:value]}"
-  when "populate.active_partition"
+  when "populate.tenant_partition"
     Rails.logger.info "🧹 Limpieza: #{payload[:count]} registros movidos en #{duration.round(2)}ms"
   end
 end

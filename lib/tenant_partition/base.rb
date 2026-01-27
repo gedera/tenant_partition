@@ -61,7 +61,7 @@ module TenantPartition
         # Importante: Usamos el método partition_key (no la variable) para respetar overrides
         payload = { partition_key: partition_key, value: value, table: parent_table }
 
-        ActiveSupport::Notifications.instrument("create.active_partition", payload) do
+        ActiveSupport::Notifications.instrument("create.tenant_partition", payload) do
           name = partition_name(value)
           sql = "CREATE TABLE IF NOT EXISTS #{name} PARTITION OF #{parent_table} FOR VALUES IN ('#{value}');"
           connection.execute(sql)
@@ -117,7 +117,7 @@ module TenantPartition
 
       payload = { partition_key: key, value: val, parent_table: parent }
 
-      ActiveSupport::Notifications.instrument("populate.active_partition", payload) do |notification_payload|
+      ActiveSupport::Notifications.instrument("populate.tenant_partition", payload) do |notification_payload|
         total_moved = 0
 
         loop do

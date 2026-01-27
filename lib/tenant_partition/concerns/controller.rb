@@ -8,7 +8,7 @@ module TenantPartition
     # Solo acepta el ID de partición si viene en el Header HTTP configurado explícitamente.
     #
     # @example Configuración requerida
-    #   # config/initializers/active_partition.rb
+    #   # config/initializers/tenant_partition.rb
     #   TenantPartition.configure do |config|
     #     config.partition_key = :isp_id
     #     config.header_name = 'X-Tenant-ID' # <--- Obligatorio
