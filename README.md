@@ -1,6 +1,6 @@
-# ActivePartition
+# TenantPartition
 
-**ActivePartition** es un framework de infraestructura para Ruby on Rails (7.1+) diseñado para simplificar y automatizar la gestión de **Particionamiento por Lista (List Partitioning)** nativo de PostgreSQL.
+**TenantPartition** es un framework de infraestructura para Ruby on Rails (7.1+) diseñado para simplificar y automatizar la gestión de **Particionamiento por Lista (List Partitioning)** nativo de PostgreSQL.
 
 Específicamente construido para arquitecturas **Multi-tenant**, este framework resuelve la complejidad de:
 1.  **Composite Primary Keys (CPK):** Configuración automática de claves compuestas (`id` + `partition_key`) requeridas por ActiveRecord para soportar particionamiento.
@@ -9,7 +9,7 @@ Específicamente construido para arquitecturas **Multi-tenant**, este framework 
 
 ## 🚀 Características Principales
 
-* **Fachada de Servicio:** API unificada (`ActivePartition.create!`, `destroy!`, `audit`, `cleanup!`) para gestionar el ciclo de vida completo de los tenants.
+* **Fachada de Servicio:** API unificada (`TenantPartition.create!`, `destroy!`, `audit`, `cleanup!`) para gestionar el ciclo de vida completo de los tenants.
 * **Introspección Inteligente:** Los modelos de negocio detectan automáticamente su configuración de infraestructura por convención (ej: `User` -> `Partition::User`).
 * **Migration DSL:** Helper `create_partitioned_table` para definir tablas particionadas y sus tablas `DEFAULT` en una sola instrucción.
 * **Seguridad Estricta:** Concern para controladores que valida Headers HTTP (`X-Tenant-ID`) para asegurar el contexto del tenant.
@@ -37,10 +37,10 @@ bundle install
 
 ## ⚙️ Configuración
 
-Crea un inicializador en `config/initializers/activepartition.rb`. Es **obligatorio** definir la clave de partición.
+Crea un inicializador en `config/initializers/tenant_partition.rb`. Es **obligatorio** definir la clave de partición.
 
 ```ruby
-ActivePartition.configure do |config|
+TenantPartition.configure do |config|
   # 1. La columna que discrimina los tenants (ej: :isp_id, :account_id, :tenant_id)
   config.partition_key = :isp_id
 
@@ -69,12 +69,12 @@ end
 
 ### 2. Capa de Infraestructura (Modelos Partition)
 
-Define modelos que hereden de `ActivePartition::Base`. Estos modelos son responsables de las operaciones DDL (Create/Drop tables). Por convención, se recomienda usar el namespace `Partition::`.
+Define modelos que hereden de `TenantPartition::Base`. Estos modelos son responsables de las operaciones DDL (Create/Drop tables). Por convención, se recomienda usar el namespace `Partition::`.
 
 ```ruby
 # app/models/partition/conversation.rb
 module Partition
-  class Conversation < ActivePartition::Base
+  class Conversation < TenantPartition::Base
     # Hereda la configuración global (:isp_id) automáticamente.
   end
 end
@@ -90,7 +90,7 @@ Al incluir el concern, la gema busca automáticamente si existe un modelo de inf
 ```ruby
 # app/models/conversation.rb
 class Conversation < ApplicationRecord
-  include ActivePartition::Concerns::Partitioned
+  include TenantPartition::Concerns::Partitioned
 
   # ¡Listo! Rails ahora sabe que la Primary Key es [:id, :isp_id]
   # y aplica scopes automáticos.
@@ -99,7 +99,7 @@ end
 
 ### 4. Orquestación (Ciclo de Vida del Tenant)
 
-Ya no necesitas crear particiones tabla por tabla. Usa la **Fachada** `ActivePartition` para gestionar la infraestructura de un tenant en **todos** los modelos registrados simultáneamente.
+Ya no necesitas crear particiones tabla por tabla. Usa la **Fachada** `TenantPartition` para gestionar la infraestructura de un tenant en **todos** los modelos registrados simultáneamente.
 
 **Crear un nuevo Tenant (Provisioning):**
 Ideal para usar en tu `RegistrationService` o `AfterCommit` de la creación del tenant.
@@ -111,7 +111,7 @@ def create_tenant
 
   # Busca TODOS los modelos particionados y crea las tablas físicas para este ID.
   # Es idempotente: si alguna ya existe, la salta sin error.
-  ActivePartition.create!(isp.id)
+  TenantPartition.create!(isp.id)
 end
 ```
 
@@ -120,7 +120,7 @@ end
 ```ruby
 # Esta operación realiza DETACH + DROP de las tablas físicas.
 # ¡Es destructiva e irreversible!
-ActivePartition.destroy!(old_isp.id)
+TenantPartition.destroy!(old_isp.id)
 ```
 
 ### 5. Seguridad en Controladores
@@ -129,7 +129,7 @@ Protege tus API endpoints asegurando que siempre reciban el ID del tenant.
 
 ```ruby
 class ApiController < ActionController::API
-  include ActivePartition::Concerns::Controller
+  include TenantPartition::Concerns::Controller
 
   # Valida que el request traiga el header 'X-Tenant-ID'.
   # Devuelve 400 Bad Request si falta.
@@ -145,7 +145,7 @@ end
 
 ## 🛡 Mantenimiento y Recuperación
 
-ActivePartition maneja el escenario de "Race Condition" donde llegan datos *antes* de que la partición exista. Esos datos caen automáticamente en la tabla `_default`.
+TenantPartition maneja el escenario de "Race Condition" donde llegan datos *antes* de que la partición exista. Esos datos caen automáticamente en la tabla `_default`.
 
 ### Auditoría
 
@@ -153,7 +153,7 @@ Verifica si tienes datos "fugados" en las tablas default:
 
 ```ruby
 # Desde consola Rails
-report = ActivePartition.audit
+report = TenantPartition.audit
 # => { "Partition::Conversation" => 14, "Partition::Message" => 0 }
 ```
 
@@ -168,7 +168,7 @@ Mueve los datos huérfanos a sus particiones correspondientes de forma atómica 
 
 ```ruby
 # Ruby API (Ideal para Jobs nocturnos)
-ActivePartition.cleanup!
+TenantPartition.cleanup!
 ```
 
 O vía Rake task:
@@ -182,7 +182,7 @@ Puedes suscribirte a los eventos para enviar métricas a tu sistema de monitoreo
 
 ```ruby
 # config/initializers/notifications.rb
-ActiveSupport::Notifications.subscribe(/activepartition/) do |name, start, finish, id, payload|
+ActiveSupport::Notifications.subscribe(/tenant_partition/) do |name, start, finish, id, payload|
   duration = (finish - start) * 1000
 
   case name

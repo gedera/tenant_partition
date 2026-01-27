@@ -5,34 +5,34 @@ require "active_model"
 require "active_support/all"
 
 # Carga de la versión y componentes internos
-require_relative "activepartition/version"
-require_relative "activepartition/configuration"
-require_relative "activepartition/safety_guard"
-require_relative "activepartition/base"
-require_relative "activepartition/concerns/partitioned"
-require_relative "activepartition/concerns/controller"
+require_relative "tenant_partition/version"
+require_relative "tenant_partition/configuration"
+require_relative "tenant_partition/safety_guard"
+require_relative "tenant_partition/base"
+require_relative "tenant_partition/concerns/partitioned"
+require_relative "tenant_partition/concerns/controller"
 
 # Integración con Ruby on Rails
-require_relative "activepartition/railtie" if defined?(Rails)
+require_relative "tenant_partition/railtie" if defined?(Rails)
 
-# ActivePartition es el punto de entrada principal para la gestión de particionamiento
+# TenantPartition es el punto de entrada principal para la gestión de particionamiento
 # en PostgreSQL dentro de aplicaciones Rails.
 #
 # Actúa como una **Fachada** que centraliza:
 # 1. Configuración de la gema.
 # 2. Orquestación del ciclo de vida de los tenants (Crear/Borrar particiones).
 # 3. Mantenimiento y limpieza de datos huérfanos.
-module ActivePartition
+module TenantPartition
   # Error base para todas las excepciones de la gema.
   class Error < StandardError; end
 
   class << self
-    # @return [ActivePartition::Configuration] El objeto de configuración global.
+    # @return [TenantPartition::Configuration] El objeto de configuración global.
     attr_accessor :configuration
 
     # Configura la gema mediante un bloque e inicializa las validaciones de seguridad.
     #
-    # @yieldparam [ActivePartition::Configuration] config
+    # @yieldparam [TenantPartition::Configuration] config
     # @return [void]
     def configure
       self.configuration ||= Configuration.new
@@ -102,7 +102,7 @@ module ActivePartition
     #
     # @return [Hash{String => Integer}] Mapa con el nombre del modelo y la cantidad de registros huérfanos.
     # @example
-    #   ActivePartition.audit
+    #   TenantPartition.audit
     #   # => { "Partition::Message" => 150, "Partition::Log" => 0 }
     def audit
       ensure_models_loaded!
@@ -163,10 +163,10 @@ module ActivePartition
 
     private
 
-    # Encuentra todas las clases cargadas que heredan de ActivePartition::Base.
+    # Encuentra todas las clases cargadas que heredan de TenantPartition::Base.
     # @return [Array<Class>]
     def partitionable_models
-      ObjectSpace.each_object(Class).select { |klass| klass < ActivePartition::Base }
+      ObjectSpace.each_object(Class).select { |klass| klass < TenantPartition::Base }
     end
 
     # Cuenta registros en la tabla default de un modelo de infraestructura.
@@ -204,7 +204,7 @@ module ActivePartition
     def log_error(tag, msg) = logger&.error(format_log(tag, msg))
 
     def format_log(tag, msg)
-      "[ActivePartition] [#{tag}] #{msg}"
+      "[TenantPartition] [#{tag}] #{msg}"
     end
 
     def logger

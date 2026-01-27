@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActivePartition
+module TenantPartition
   module Concerns
     # Helpers y validaciones para controladores en arquitecturas Multi-tenant.
     #
@@ -9,14 +9,14 @@ module ActivePartition
     #
     # @example Configuración requerida
     #   # config/initializers/active_partition.rb
-    #   ActivePartition.configure do |config|
+    #   TenantPartition.configure do |config|
     #     config.partition_key = :isp_id
     #     config.header_name = 'X-Tenant-ID' # <--- Obligatorio
     #   end
     #
     # @example Uso en el controlador
     #   class ApiController < ActionController::API
-    #     include ActivePartition::Concerns::Controller
+    #     include TenantPartition::Concerns::Controller
     #     before_action :require_partition_key!
     #   end
     module Controller
@@ -29,14 +29,14 @@ module ActivePartition
 
       # Devuelve el valor del ID de partición actual extraído exclusivamente de los Headers.
       #
-      # Utiliza únicamente el nombre de header definido en +ActivePartition.configuration.header_name+.
+      # Utiliza únicamente el nombre de header definido en +TenantPartition.configuration.header_name+.
       # No realiza inferencias ni busca en parámetros de la URL.
       #
       # @return [String, nil] El valor del header o nil si no está presente o configurado.
       def current_partition_id
         return @current_partition_id if defined?(@current_partition_id)
 
-        header_key = ActivePartition.configuration.header_name
+        header_key = TenantPartition.configuration.header_name
 
         # Si no se configuró un nombre de header, no podemos buscar nada.
         return @current_partition_id = nil unless header_key.present?
@@ -52,11 +52,11 @@ module ActivePartition
       def require_partition_key!
         return if current_partition_id.present?
 
-        header_key = ActivePartition.configuration.header_name
+        header_key = TenantPartition.configuration.header_name
 
         # Mensaje de error detallado dependiendo de si es un error de configuración o de petición
         error_message = if header_key.blank?
-                          "Server Configuration Error: 'header_name' is not configured in ActivePartition."
+                          "Server Configuration Error: 'header_name' is not configured in TenantPartition."
                         else
                           "Missing required header: '#{header_key}'"
                         end

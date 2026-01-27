@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActivePartition
+module TenantPartition
   class Configuration
     # @return [Symbol, nil] Columna de base de datos (ej: :isp_id)
     attr_accessor :partition_key
@@ -26,7 +26,7 @@ module ActivePartition
       yield(configuration)
 
       unless configuration.valid?
-        raise ActivePartition::Error, "Debe configurar un 'partition_key' en el inicializador de ActivePartition."
+        raise TenantPartition::Error, "Debe configurar un 'partition_key' en el inicializador de TenantPartition."
       end
     end
   end

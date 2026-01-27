@@ -1,16 +1,16 @@
 # frozen_string_literal: true
 
-require_relative "lib/activepartition/version"
+require_relative "lib/tenant_partition/version"
 
 Gem::Specification.new do |spec|
   spec.name = "tenant_partition"
-  spec.version = ActivePartition::VERSION
+  spec.version = TenantPartition::VERSION
   spec.authors = ["gabriel"]
   spec.email = ["gedera@wispro.co"]
 
   spec.summary = "Gestión de particiones PostgreSQL al estilo Rails."
   spec.description = "Framework de infraestructura para Rails 7.1+ que automatiza el particionamiento nativo (List Partitioning). Incluye soporte para Composite Primary Keys, orquestación de tenants y migraciones zero-downtime."
-  spec.homepage = "https://github.com/gedera/activepartition"
+  spec.homepage = "https://github.com/gedera/tenant_partition"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
 

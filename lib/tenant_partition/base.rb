@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
-module ActivePartition
+module TenantPartition
   # Clase base para la gestión de infraestructura de particionamiento en PostgreSQL.
   #
   # Proporciona una interfaz para manejar el ciclo de vida de las tablas físicas (Particiones).
   #
   # @abstract Hereda de esta clase para definir un recurso de partición.
   # @example
-  #   class Partition::Chat < ActivePartition::Base
+  #   class Partition::Chat < TenantPartition::Base
   #     # Opcional: Sobrescribir la clave global
   #     self.partition_key = :region_code
   #   end
@@ -19,7 +19,7 @@ module ActivePartition
     def self.inherited(subclass)
       super
       # Intentamos definir el atributo por defecto si existe configuración global
-      key = ActivePartition.configuration&.partition_key
+      key = TenantPartition.configuration&.partition_key
       subclass.attribute key if key
     end
 
@@ -35,8 +35,8 @@ module ActivePartition
 
       # Prioridad: 1. Clave de la clase, 2. Clave global
       def partition_key
-        @partition_key ||= ActivePartition.configuration&.partition_key ||
-          raise(ActivePartition::Error, "Clave de partición no configurada.")
+        @partition_key ||= TenantPartition.configuration&.partition_key ||
+          raise(TenantPartition::Error, "Clave de partición no configurada.")
       end
 
       def partition_key=(value)

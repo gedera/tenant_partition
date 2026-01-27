@@ -2,8 +2,8 @@
 
 require "rails/railtie"
 
-module ActivePartition
-  # Railtie encargado de integrar ActivePartition en el ciclo de vida de Rails.
+module TenantPartition
+  # Railtie encargado de integrar TenantPartition en el ciclo de vida de Rails.
   #
   # Su responsabilidad principal es inyectar los componentes de la gema (Tareas Rake,
   # Helpers de Migración) en la aplicación anfitriona durante el proceso de arranque.
@@ -23,15 +23,15 @@ module ActivePartition
     #
     # Inyecta los helpers de migración (como +create_partitioned_table+) directamente
     # en el adaptador de PostgreSQL para extender el DSL de las migraciones.
-    initializer "active_partition.insert_schema_statements" do
+    initializer "tenant_partition.insert_schema_statements" do
       ActiveSupport.on_load(:active_record) do
-        require "activepartition/schema/statements"
+        require "tenant_partition/schema/statements"
 
         # Validación de seguridad:
         # Solo inyectamos el módulo si el adaptador configurado es efectivamente PostgreSQL.
         # Esto previene errores si la gema se instala en proyectos con MySQL o SQLite.
         if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter) && connection_db_config.adapter == "postgresql"
-          ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.include ActivePartition::Schema::Statements
+          ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.include TenantPartition::Schema::Statements
         end
       end
     end

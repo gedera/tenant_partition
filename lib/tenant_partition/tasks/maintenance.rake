@@ -1,14 +1,14 @@
-# lib/activepartition/tasks/maintenance.rake
+# lib/tenant_partition/tasks/maintenance.rake
 # frozen_string_literal: true
 
 namespace :active_partition do
-  desc "Audita todas las tablas DEFAULT definidas en ActivePartition"
+  desc "Audita todas las tablas DEFAULT definidas en TenantPartition"
   task audit: :environment do
-    ActivePartition.audit
+    TenantPartition.audit
   end
 
   desc "Limpia registros huérfanos moviéndolos a sus particiones"
   task cleanup: :environment do
-    ActivePartition.cleanup!
+    TenantPartition.cleanup!
   end
 end

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActivePartition
+module TenantPartition
   module Concerns
     # Módulo de infraestructura para modelos de negocio (ApplicationRecord).
     #
@@ -14,18 +14,18 @@ module ActivePartition
     # 1. **Explícita:** Definida manualmente con `partitioned_by :key` en el modelo.
     # 2. **Inferencia (Convención):** Busca si existe una clase de infraestructura asociada
     #    (ej: para `Conversation` busca `Partition::Conversation`) y utiliza su configuración.
-    # 3. **Global:** Utiliza la clave definida en `ActivePartition.configure`.
+    # 3. **Global:** Utiliza la clave definida en `TenantPartition.configure`.
     #
     # @example Modo Automático (Inferencia)
     #   # Si Partition::LegacyChat tiene `self.partition_key = :region_id`
     #   class LegacyChat < ApplicationRecord
-    #     include ActivePartition::Concerns::Partitioned
+    #     include TenantPartition::Concerns::Partitioned
     #     # Automáticamente configura PK: [:id, :region_id]
     #   end
     #
     # @example Modo Manual (Override)
     #   class Log < ApplicationRecord
-    #     include ActivePartition::Concerns::Partitioned
+    #     include TenantPartition::Concerns::Partitioned
     #     partitioned_by :custom_id
     #   end
     module Partitioned
@@ -34,7 +34,7 @@ module ActivePartition
       included do
         # Punto de entrada para inclusión directa.
         # 'self' es la clase que incluye el módulo.
-        ActivePartition::Concerns::Partitioned.configure_model(self)
+        TenantPartition::Concerns::Partitioned.configure_model(self)
       end
 
       class_methods do
@@ -45,14 +45,14 @@ module ActivePartition
         # @param subclass [Class] La clase que está heredando.
         def inherited(subclass)
           super
-          ActivePartition::Concerns::Partitioned.configure_model(subclass)
+          TenantPartition::Concerns::Partitioned.configure_model(subclass)
         end
 
         # Define manualmente la clave de partición, ignorando la inferencia y la config global.
         #
         # @param key [Symbol] Nombre de la columna de partición.
         def partitioned_by(key)
-          ActivePartition::Concerns::Partitioned.apply_configuration(self, key)
+          TenantPartition::Concerns::Partitioned.apply_configuration(self, key)
         end
       end
 
@@ -91,7 +91,7 @@ module ActivePartition
         end
 
         # 2. Configuración Global (Fallback):
-        ActivePartition.configuration&.partition_key
+        TenantPartition.configuration&.partition_key
       end
 
       # Aplica la configuración de Primary Key y Scopes al modelo.

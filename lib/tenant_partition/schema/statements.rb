@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ActivePartition
+module TenantPartition
   module Schema
     # Proporciona métodos adicionales para las migraciones de ActiveRecord
     # enfocados en la automatización del particionamiento nativo de PostgreSQL.
@@ -16,10 +16,10 @@ module ActivePartition
       # @yield [t] Bloque para definir las columnas de la tabla.
       def create_partitioned_table(table_name, **options, &block)
         # Prioridad: 1. Opción pasada al método, 2. Configuración global
-        key = options.delete(:partition_key) || ActivePartition.configuration&.partition_key
+        key = options.delete(:partition_key) || TenantPartition.configuration&.partition_key
 
         unless key
-          raise ActivePartition::Error, "Debe configurar 'partition_key' globalmente o pasarlo como opción."
+          raise TenantPartition::Error, "Debe configurar 'partition_key' globalmente o pasarlo como opción."
         end
 
         # --- LÓGICA DE PRIMARY KEY COMPUESTA ---
