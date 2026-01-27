@@ -5,15 +5,15 @@ require "active_model"
 require "active_support/all"
 
 # Carga de la versión y componentes internos
-require_relative "active_partition/version"
-require_relative "active_partition/configuration"
-require_relative "active_partition/safety_guard"
-require_relative "active_partition/base"
-require_relative "active_partition/concerns/partitioned"
-require_relative "active_partition/concerns/controller"
+require_relative "activepartition/version"
+require_relative "activepartition/configuration"
+require_relative "activepartition/safety_guard"
+require_relative "activepartition/base"
+require_relative "activepartition/concerns/partitioned"
+require_relative "activepartition/concerns/controller"
 
 # Integración con Ruby on Rails
-require_relative "active_partition/railtie" if defined?(Rails)
+require_relative "activepartition/railtie" if defined?(Rails)
 
 # ActivePartition es el punto de entrada principal para la gestión de particionamiento
 # en PostgreSQL dentro de aplicaciones Rails.

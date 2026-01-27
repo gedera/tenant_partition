@@ -25,7 +25,7 @@ module ActivePartition
     # en el adaptador de PostgreSQL para extender el DSL de las migraciones.
     initializer "active_partition.insert_schema_statements" do
       ActiveSupport.on_load(:active_record) do
-        require "active_partition/schema/statements"
+        require "activepartition/schema/statements"
 
         # Validación de seguridad:
         # Solo inyectamos el módulo si el adaptador configurado es efectivamente PostgreSQL.

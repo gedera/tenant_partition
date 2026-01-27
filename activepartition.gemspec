@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require_relative "lib/active_partition/version"
+require_relative "lib/activepartition/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "active_partition"
+  spec.name = "activepartition"
   spec.version = ActivePartition::VERSION
   spec.authors = ["gabriel"]
   spec.email = ["gedera@wispro.co"]

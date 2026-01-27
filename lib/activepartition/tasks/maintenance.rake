@@ -1,4 +1,4 @@
-# lib/active_partition/tasks/maintenance.rake
+# lib/activepartition/tasks/maintenance.rake
 # frozen_string_literal: true
 
 namespace :active_partition do
