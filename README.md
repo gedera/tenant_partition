@@ -1,33 +1,35 @@
 # ActivePartition
 
-**ActivePartition** es un framework de infraestructura para Ruby on Rails que simplifica la gestión de particionamiento nativo en PostgreSQL (List Partitioning).
+**ActivePartition** es un framework de infraestructura para Ruby on Rails (7.1+) diseñado para simplificar y automatizar la gestión de **Particionamiento por Lista (List Partitioning)** nativo de PostgreSQL.
 
-Diseñado específicamente para arquitecturas **Multi-tenant** y microservicios, permite manejar el ciclo de vida de las particiones (creación, migración de datos y eliminación) utilizando convenciones familiares al estilo de ActiveRecord.
+Específicamente construido para arquitecturas **Multi-tenant**, este framework resuelve la complejidad de:
+1.  **Composite Primary Keys (CPK):** Configuración automática de claves compuestas (`id` + `partition_key`) requeridas por ActiveRecord para soportar particionamiento.
+2.  **Orquestación Centralizada:** Una única interfaz para crear y eliminar particiones en **todos** los modelos de la aplicación simultáneamente.
+3.  **Mantenimiento Zero-Downtime:** Migración atómica de datos "huérfanos" (que cayeron en la tabla `DEFAULT`) hacia sus particiones correctas sin perder servicio.
 
-## 🚀 Características
+## 🚀 Características Principales
 
-* **Agnóstico al Dominio**: Configura tu propia clave de partición (`isp_id`, `account_id`, etc.) globalmente o por modelo.
-* **Migration Helpers**: DSL nativo para crear tablas particionadas y sus tablas `DEFAULT` automáticamente.
-* **Developer Experience (DX)**: Concerns integrados para asegurar controladores y filtrar modelos automáticamente.
-* **Strict Security Strategy**: Validación automática de Headers HTTP para identificar tenants.
-* **Zero-Downtime Data Move**: Mueve registros "huérfanos" de la tabla default a su partición correcta de forma atómica.
-* **Observabilidad**: Instrumentación integrada con `ActiveSupport::Notifications`.
+* **Fachada de Servicio:** API unificada (`ActivePartition.create!`, `destroy!`, `audit`, `cleanup!`) para gestionar el ciclo de vida completo de los tenants.
+* **Introspección Inteligente:** Los modelos de negocio detectan automáticamente su configuración de infraestructura por convención (ej: `User` -> `Partition::User`).
+* **Migration DSL:** Helper `create_partitioned_table` para definir tablas particionadas y sus tablas `DEFAULT` en una sola instrucción.
+* **Seguridad Estricta:** Concern para controladores que valida Headers HTTP (`X-Tenant-ID`) para asegurar el contexto del tenant.
+* **Observabilidad:** Instrumentación integrada con `ActiveSupport::Notifications`.
 
 ## 📋 Requisitos
 
-* Ruby >= 3.2
-* Ruby on Rails >= 6.0
-* PostgreSQL >= 10.0 (Se recomienda 12+ para mejor performance)
+* **Ruby:** >= 3.2
+* **Ruby on Rails:** >= 7.1 (Requerido para soporte nativo de Composite Primary Keys)
+* **PostgreSQL:** >= 10.0 (Se recomienda 12+ para mejor rendimiento)
 
 ## 📦 Instalación
 
-Agrega esta línea al Gemfile de tu aplicación:
+Agrega esto a tu `Gemfile`:
 
 ```ruby
 gem 'active_partition'
 ```
 
-Y luego ejecuta:
+Luego ejecuta:
 
 ```bash
 bundle install
@@ -35,194 +37,163 @@ bundle install
 
 ## ⚙️ Configuración
 
-Crea un inicializador en `config/initializers/active_partition.rb`. Es vital configurar tanto la clave de la base de datos como el Header HTTP esperado para la seguridad de la API.
+Crea un inicializador en `config/initializers/active_partition.rb`. Es **obligatorio** definir la clave de partición.
 
 ```ruby
 ActivePartition.configure do |config|
-  # 1. Columna de base de datos que discrimina tus particiones (Global).
+  # 1. La columna que discrimina los tenants (ej: :isp_id, :account_id, :tenant_id)
   config.partition_key = :isp_id
 
-  # 2. Nombre exacto del Header HTTP que traerá el ID del tenant.
-  # La estrategia de seguridad por defecto del controlador es ESTRICTA: solo leerá de este header.
-  config.header_name = 'X-Tenant-ID'
+  # 2. El Header HTTP para la seguridad en controladores API
+  config.header_name   = 'X-Tenant-ID'
 end
 ```
 
-## 🛠 Uso
+## 🛠 Guía de Uso
 
-### 1. Migraciones
+### 1. Migraciones (Crear las Tablas)
 
-ActivePartition extiende las migraciones de Rails. Usa `create_partitioned_table`.
+Usa el helper `create_partitioned_table`. Este método deshabilita el ID automático simple y configura una **Primary Key Compuesta** (`[:id, :partition_key]`) necesaria para que PostgreSQL permita el particionamiento.
 
-**Uso Estándar (Usa la clave global):**
 ```ruby
-class CreateMessages < ActiveRecord::Migration[7.0]
+class CreateConversations < ActiveRecord::Migration[7.1]
   def change
-    create_partitioned_table :messages do |t|
-      t.uuid :chat_id, null: false
-      t.jsonb :payload
+    create_partitioned_table :conversations do |t|
+      # No definas t.primary_key. La gema crea (id, isp_id) automáticamente.
+      t.string :topic
       t.timestamps
     end
   end
 end
 ```
 
-**Uso Avanzado (Clave personalizada):**
+### 2. Capa de Infraestructura (Modelos Partition)
+
+Define modelos que hereden de `ActivePartition::Base`. Estos modelos son responsables de las operaciones DDL (Create/Drop tables). Por convención, se recomienda usar el namespace `Partition::`.
+
 ```ruby
-class CreateLogs < ActiveRecord::Migration[7.0]
-  def change
-    # Sobrescribe la clave global solo para esta tabla
-    create_partitioned_table :system_logs, partition_key: :region_code do |t|
-      t.text :message
-    end
-  end
-end
-```
-
-### 2. Modelos de Infraestructura
-
-Crea modelos que hereden de `ActivePartition::Base` para gestionar la creación/eliminación de particiones físicas.
-
-**Modelo Estándar:**
-```ruby
-# app/models/partition/message.rb
+# app/models/partition/conversation.rb
 module Partition
-  class Message < ActivePartition::Base
-    # Usa :isp_id (global) e infiere nombres de tabla
+  class Conversation < ActivePartition::Base
+    # Hereda la configuración global (:isp_id) automáticamente.
   end
 end
 ```
 
-### 3. Personalización Avanzada (Convenciones)
+### 3. Capa de Negocio (Modelos Rails)
 
-Si tienes una base de datos legacy o no sigues las convenciones de Rails, puedes sobrescribir manualmente los nombres de las tablas y prefijos.
+En tus modelos estándar (`ApplicationRecord`), incluye el concern `Partitioned`.
 
-```ruby
-# app/models/partition/legacy_data.rb
-module Partition
-  class LegacyData < ActivePartition::Base
-    # Sobrescribir la clave de partición
-    self.partition_key = :client_code
-
-    # Sobrescribir el nombre de la tabla padre
-    self.parent_table = "tbl_legacy_data"
-
-    # Sobrescribir el prefijo de las particiones hijas
-    # Las tablas se crearán como: "data_partition_CLI001", "data_partition_CLI002"...
-    self.prefix = "data_partition"
-
-    # Sobrescribir la tabla default
-    self.default_table = "tbl_legacy_data_fallback"
-  end
-end
-```
-
-### 4. Integración en Modelos de Negocio (Concerns)
-
-Para tus modelos normales (`ApplicationRecord`), incluye el concern `Partitioned` para agregar scopes dinámicos.
+**Magia de Introspección:**
+Al incluir el concern, la gema busca automáticamente si existe un modelo de infraestructura asociado (ej: `Partition::Conversation`) y hereda su configuración.
 
 ```ruby
-class Message < ApplicationRecord
+# app/models/conversation.rb
+class Conversation < ApplicationRecord
   include ActivePartition::Concerns::Partitioned
-end
 
-# Uso automático del filtro según configuración:
-Message.for_partition("uuid-tenant-123").all
+  # ¡Listo! Rails ahora sabe que la Primary Key es [:id, :isp_id]
+  # y aplica scopes automáticos.
+end
 ```
 
-### 5. Seguridad en Controladores (Concerns)
+### 4. Orquestación (Ciclo de Vida del Tenant)
 
-Protege tus endpoints API asegurando que siempre reciban el ID del tenant.
+Ya no necesitas crear particiones tabla por tabla. Usa la **Fachada** `ActivePartition` para gestionar la infraestructura de un tenant en **todos** los modelos registrados simultáneamente.
 
-#### Estrategia por Defecto (Headers)
-La gema buscará automáticamente el header configurado (`X-Tenant-ID`).
+**Crear un nuevo Tenant (Provisioning):**
+Ideal para usar en tu `RegistrationService` o `AfterCommit` de la creación del tenant.
+
+```ruby
+# En tu Service Object o Controller de registro
+def create_tenant
+  isp = Isp.create!(params)
+
+  # Busca TODOS los modelos particionados y crea las tablas físicas para este ID.
+  # Es idempotente: si alguna ya existe, la salta sin error.
+  ActivePartition.create!(isp.id)
+end
+```
+
+**Eliminar un Tenant (Deprovisioning):**
+
+```ruby
+# Esta operación realiza DETACH + DROP de las tablas físicas.
+# ¡Es destructiva e irreversible!
+ActivePartition.destroy!(old_isp.id)
+```
+
+### 5. Seguridad en Controladores
+
+Protege tus API endpoints asegurando que siempre reciban el ID del tenant.
 
 ```ruby
 class ApiController < ActionController::API
   include ActivePartition::Concerns::Controller
 
-  # Valida presencia del ID. Devuelve 400 Bad Request si falta.
+  # Valida que el request traiga el header 'X-Tenant-ID'.
+  # Devuelve 400 Bad Request si falta.
   before_action :require_partition_key!
 
   def index
-    # 'current_partition_id' devuelve el valor del Header
-    @messages = Message.for_partition(current_partition_id).all
-    render json: @messages
+    # current_partition_id contiene el valor seguro del Header
+    @chats = Conversation.for_partition(current_partition_id).all
+    render json: @chats
   end
 end
 ```
 
-#### Personalización de la Estrategia (Override)
-Si tu API no es REST tradicional o necesitas extraer el ID de otra fuente (JWT, Subdominios, Cookies), simplemente sobrescribe el método `current_partition_id`.
+## 🛡 Mantenimiento y Recuperación
+
+ActivePartition maneja el escenario de "Race Condition" donde llegan datos *antes* de que la partición exista. Esos datos caen automáticamente en la tabla `_default`.
+
+### Auditoría
+
+Verifica si tienes datos "fugados" en las tablas default:
 
 ```ruby
-class GraphqlController < ApplicationController
-  include ActivePartition::Concerns::Controller
-
-  # El filtro 'require_partition_key!' usará tu método personalizado
-  before_action :require_partition_key!
-
-  private
-
-  # Sobrescribimos la lógica por defecto de la gema
-  def current_partition_id
-    # Ejemplo: Extraer desde un token JWT decodificado en lugar de headers crudos
-    @current_partition_id ||= current_user_token.payload['tenant_uuid']
-  end
-end
+# Desde consola Rails
+report = ActivePartition.audit
+# => { "Partition::Conversation" => 14, "Partition::Message" => 0 }
 ```
 
-### 6. Gestión de Particiones (Infraestructura)
+O vía Rake task:
+```bash
+bundle exec rails active_partition:audit
+```
 
-Puedes crear, buscar y eliminar particiones físicamente:
+### Limpieza (Cleanup)
+
+Mueve los datos huérfanos a sus particiones correspondientes de forma atómica y segura.
 
 ```ruby
-tenant_uuid = "c6920194-b15e-41e0-b0c0-1f2f0a8c2d3e"
-
-# Crear tabla física
-Partition::Message.create(tenant_uuid)
-
-# Verificar existencia
-Partition::Message.exists?(tenant_uuid) # => true
-
-# Eliminar partición (Safe Drop: Detach + Drop)
-Partition::Message.find(tenant_uuid).destroy
+# Ruby API (Ideal para Jobs nocturnos)
+ActivePartition.cleanup!
 ```
 
-## 🛡 Mantenimiento y Resiliencia
-
-### Recuperación de Datos Huérfanos
-Si por alguna condición de carrera llegaron datos antes de que se creara la partición, estos caerán en la tabla `_default`. Puedes moverlos a su lugar correcto atómicamente:
-
-```ruby
-partition = Partition::Message.find(tenant_uuid)
-partition.populate_from_default
+O vía Rake task:
+```bash
+bundle exec rails active_partition:cleanup
 ```
-
-### Tareas Rake (Ops)
-Herramientas para auditar la salud de tu base de datos:
-
-* `bundle exec rails active_partition:audit` : Busca datos "fugados" en tablas DEFAULT.
-* `bundle exec rails active_partition:cleanup` : Mueve datos huérfanos a sus particiones correctas.
 
 ## 📊 Observabilidad
 
-Suscríbete a los eventos para enviar métricas a tu sistema de monitoreo.
+Puedes suscribirte a los eventos para enviar métricas a tu sistema de monitoreo (Datadog, Prometheus, NewRelic).
 
 ```ruby
-# config/initializers/active_partition_notifications.rb
+# config/initializers/notifications.rb
 ActiveSupport::Notifications.subscribe(/active_partition/) do |name, start, finish, id, payload|
   duration = (finish - start) * 1000
 
   case name
   when "create.active_partition"
-    Rails.logger.info "Partición creada: #{payload[:table]} (Key: #{payload[:partition_key]}) -> #{payload[:value]}"
+    Rails.logger.info "📦 Partición creada: #{payload[:table]} para #{payload[:value]}"
   when "populate.active_partition"
-    Rails.logger.info "Migrados #{payload[:count]} registros en #{duration.round(2)}ms"
+    Rails.logger.info "🧹 Limpieza: #{payload[:count]} registros movidos en #{duration.round(2)}ms"
   end
 end
 ```
 
 ## 📄 Licencia
 
-La gema está disponible como código abierto bajo los términos de la [Licencia MIT](https://opensource.org/licenses/MIT).
+Este proyecto está disponible como código abierto bajo los términos de la [Licencia MIT](https://opensource.org/licenses/MIT).
