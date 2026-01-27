@@ -10,14 +10,14 @@ Gem::Specification.new do |spec|
 
   spec.summary = "Gestión de particiones PostgreSQL al estilo Rails."
   spec.description = "Framework de infraestructura para Rails 7.1+ que automatiza el particionamiento nativo (List Partitioning). Incluye soporte para Composite Primary Keys, orquestación de tenants y migraciones zero-downtime."
-  spec.homepage = "https://github.com/gedera/active_partition"
+  spec.homepage = "https://github.com/gedera/activepartition"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
 
   # spec.metadata["allowed_push_host"] = "TODO: Set to your gem server 'https://example.com'"
   # spec.metadata["homepage_uri"] = spec.homepage
-  spec.metadata["source_code_uri"] = "https://github.com/gedera/active_partition"
-  spec.metadata["changelog_uri"] = "https://github.com/gedera/active_partition/blob/main/CHANGELOG.md"
+  spec.metadata["source_code_uri"] = "https://github.com/gedera/activepartition"
+  spec.metadata["changelog_uri"] = "https://github.com/gedera/activepartition/blob/main/CHANGELOG.md"
 
   # Specify which files should be added to the gem when it is released.
   # The `git ls-files -z` loads the files in the RubyGem that have been added into git.

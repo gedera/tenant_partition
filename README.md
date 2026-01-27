@@ -26,7 +26,7 @@ Específicamente construido para arquitecturas **Multi-tenant**, este framework 
 Agrega esto a tu `Gemfile`:
 
 ```ruby
-gem 'active_partition'
+gem 'activepartition'
 ```
 
 Luego ejecuta:
@@ -37,7 +37,7 @@ bundle install
 
 ## ⚙️ Configuración
 
-Crea un inicializador en `config/initializers/active_partition.rb`. Es **obligatorio** definir la clave de partición.
+Crea un inicializador en `config/initializers/activepartition.rb`. Es **obligatorio** definir la clave de partición.
 
 ```ruby
 ActivePartition.configure do |config|
@@ -182,7 +182,7 @@ Puedes suscribirte a los eventos para enviar métricas a tu sistema de monitoreo
 
 ```ruby
 # config/initializers/notifications.rb
-ActiveSupport::Notifications.subscribe(/active_partition/) do |name, start, finish, id, payload|
+ActiveSupport::Notifications.subscribe(/activepartition/) do |name, start, finish, id, payload|
   duration = (finish - start) * 1000
 
   case name
