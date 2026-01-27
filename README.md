@@ -18,8 +18,8 @@ Específicamente construido para arquitecturas **Multi-tenant**, este framework 
 ## 📋 Requisitos
 
 * **Ruby:** >= 3.2
-* **Ruby on Rails:** >= 7.1 (Requerido para soporte nativo de Composite Primary Keys)
-* **PostgreSQL:** >= 10.0 (Se recomienda 12+ para mejor rendimiento)
+* **Ruby on Rails:** >= 7.1
+* **PostgreSQL:** >= 13.0 (Requerido para `gen_random_uuid()` nativo)
 
 ## 📦 Instalación
 

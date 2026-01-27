@@ -5,7 +5,7 @@ module ActivePartition
   # para el funcionamiento de ActivePartition.
   class SafetyGuard
     # Versión mínima de PostgreSQL soportada para particionamiento nativo estable.
-    MIN_POSTGRES_VERSION = 10.0
+    MIN_POSTGRES_VERSION = 13.0
 
     # Ejecuta todas las validaciones de seguridad.
     # @raise [ActivePartition::Error] Si alguna validación falla.
