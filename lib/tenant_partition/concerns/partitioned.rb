@@ -3,7 +3,7 @@
 module TenantPartition
   module Concerns
     # Concern para modelos Rails (ApplicationRecord).
-    # Configura Primary Keys Compuestas y Scopes de partición.
+    # Configura automáticamente las claves primarias compuestas y scopes.
     module Partitioned
       extend ActiveSupport::Concern
 
@@ -12,6 +12,7 @@ module TenantPartition
       end
 
       class_methods do
+        # Intercepta la herencia para autoconfigurar subclases.
         def inherited(subclass)
           super
           TenantPartition::Concerns::Partitioned.configure_model(subclass)
@@ -24,8 +25,9 @@ module TenantPartition
         end
       end
 
-      # Configura el modelo detectando la clave de partición.
+      # Configura el modelo detectando la clave de partición adecuada.
       # @api private
+      # @param klass [Class] El modelo a configurar.
       def self.configure_model(klass)
         return if klass.respond_to?(:abstract_class?) && klass.abstract_class?
 
@@ -33,20 +35,26 @@ module TenantPartition
         apply_configuration(klass, key_to_use) if key_to_use.present?
       end
 
-      # Resuelve la clave de partición por introspección o configuración global.
+      # Resuelve la clave de partición mediante introspección o configuración global.
       # @api private
+      # @param klass [Class] El modelo a inspeccionar.
+      # @return [Symbol, nil] La clave encontrada.
       def self.resolve_partition_key(klass)
         infra_class_name = "Partition::#{klass.name}"
         infra_class = infra_class_name.safe_constantize
 
-        # Prioridad a la configuración del modelo de infraestructura si existe.
-        return infra_class.partition_key if infra_class&.respond_to?(:partition_key)
+        # CORRECCIÓN: Uso explícito de && para satisfacer al linter y evitar falsa redundancia
+        if infra_class && infra_class.respond_to?(:partition_key)
+          return infra_class.partition_key
+        end
 
         TenantPartition.configuration&.partition_key
       end
 
-      # Aplica la configuración de CPK y scopes.
+      # Aplica la configuración de CPK y scopes al modelo.
       # @api private
+      # @param klass [Class] El modelo.
+      # @param key [Symbol] La clave de partición.
       def self.apply_configuration(klass, key)
         return if klass.primary_key.is_a?(Array) && klass.primary_key.include?(key.to_s)
 

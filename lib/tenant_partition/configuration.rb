@@ -1,7 +1,8 @@
 # frozen_string_literal: true
 
+# Namespace principal de la gema.
 module TenantPartition
-  # Objeto de configuración global de la gema.
+  # Clase contenedora de la configuración global de la gema.
   class Configuration
     # @return [Symbol, nil] Columna de base de datos usada para particionar (ej: :isp_id).
     attr_accessor :partition_key
@@ -14,17 +15,20 @@ module TenantPartition
       @header_name = nil
     end
 
-    # @return [Boolean] true si la configuración mínima es válida.
+    # Valida si la configuración mínima requerida está presente.
+    # @return [Boolean] true si es válida.
     def valid?
       !partition_key.nil?
     end
   end
 
   class << self
+    # @return [TenantPartition::Configuration] La instancia actual de configuración.
     attr_accessor :configuration
 
-    # Bloque de configuración principal.
-    # @raise [TenantPartition::Error] Si la configuración es inválida.
+    # Punto de entrada para configurar la gema.
+    # @yieldparam [TenantPartition::Configuration] config
+    # @raise [TenantPartition::Error] Si la configuración resultante es inválida.
     def configure
       self.configuration ||= Configuration.new
       yield(configuration)
