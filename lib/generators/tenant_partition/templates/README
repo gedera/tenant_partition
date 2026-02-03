@@ -1,0 +1,13 @@
+===============================================================================
+👋 ¡Controlador de TenantPartition generado!
+
+Se ha creado: tenant_partitions_controller.rb
+Se han agregado rutas en: config/routes.rb
+
+⚠️  IMPORTANTE - SEGURIDAD ⚠️
+Por defecto, este controlador NO TIENE AUTENTICACIÓN.
+Cualquiera podría crear o borrar particiones si no lo proteges.
+
+1. Abre tenant_partitions_controller.rb
+2. Descomenta o agrega tu `before_action` de autenticación (ej: Devise).
+===============================================================================

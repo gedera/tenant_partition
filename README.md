@@ -123,7 +123,19 @@ end
 TenantPartition.destroy!(old_isp.id)
 ```
 
-### 5. Seguridad en Controladores
+### 5. Generador de API (Provisioning)
+
+Para facilitar la integración con sistemas externos, la gema incluye un generador que crea un controlador base con las acciones `create`, `destroy` y `show` para tus tenants.
+
+**Uso Básico (Namespace por defecto `TenantPartition`):**
+
+```bash
+bundle exec rails g tenant_partition:api_controller
+# Crea: app/controllers/tenant_partition/tenant_partitions_controller.rb
+# Ruta: POST /tenant_partition/tenant_partitions
+```
+
+### 6. Seguridad en Controladores
 
 Protege tus API endpoints asegurando que siempre reciban el ID del tenant.
 
