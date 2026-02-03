@@ -68,20 +68,25 @@ module TenantPartition
       # @param batch_size [Integer] Tamaño del lote.
       # @return [Integer] Cantidad de filas afectadas (cmd_tuples).
       def move_single_batch(batch_size)
-        # Preparamos las variables para inyectar en la plantilla SQL
-        params = {
+        self.class.connection.transaction do
+          # Kernel#format es más rápido y seguro que la interpolación directa para templates
+          sql = format(MOVE_SQL, move_query_params(batch_size))
+          self.class.connection.execute(sql).cmd_tuples
+        end
+      end
+
+      # Prepara los parámetros para inyectar en la plantilla SQL.
+      # Se extrajo a un método separado para reducir la longitud de `move_single_batch`.
+      # @param batch_size [Integer] Tamaño del lote.
+      # @return [Hash] Parámetros formateados para Kernel#format.
+      def move_query_params(batch_size)
+        {
           default: self.class.default_table,
           parent: self.class.parent_table,
           key: self.class.partition_key,
           val: partition_id,
           batch_size: batch_size
         }
-
-        self.class.connection.transaction do
-          # Kernel#format es más rápido y seguro que la interpolación directa para templates
-          sql = format(MOVE_SQL, params)
-          self.class.connection.execute(sql).cmd_tuples
-        end
       end
     end
   end
