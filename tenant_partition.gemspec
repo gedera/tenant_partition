@@ -31,6 +31,6 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   # Dependencies sorted alphabetically
-  spec.add_dependency "activemodel", ">= 7.1"
-  spec.add_dependency "activerecord", ">= 7.1"
+  spec.add_dependency "activemodel", ">= 7.1", "< 9.0"
+  spec.add_dependency "activerecord", ">= 7.1", "< 9.0"
 end
