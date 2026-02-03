@@ -2,7 +2,7 @@ module <%= @module_name %>
   class TenantPartitionsController < ApplicationController
     skip_before_action :verify_authenticity_token, raise: false
 
-    # POST /system/tenant_partitions
+    # POST /<%= @module_name.underscores %>/tenant_partitions
     def create
       partition_id = params.require(:id)
 
@@ -12,25 +12,14 @@ module <%= @module_name %>
         TenantPartition.create!(partition_id)
         render json: { message: "Tenant provisioned successfully" }, status: :created
       end
-    rescue => e
-      render json: { error: e.message }, status: :unprocessable_entity
     end
 
-    # DELETE /system/tenant_partitions/:id
+    # DELETE /<%= @module_name.underscores %>/tenant_partitions/:id
     def destroy
       partition_id = params.require(:id)
 
       TenantPartition.destroy!(partition_id)
       head :no_content
-    end
-
-    # GET /system/tenant_partitions/:id
-    def show
-      if TenantPartition.exists?(params[:id])
-        render json: { active: true, id: params[:id] }, status: :ok
-      else
-        render json: { active: false }, status: :not_found
-      end
     end
   end
 end

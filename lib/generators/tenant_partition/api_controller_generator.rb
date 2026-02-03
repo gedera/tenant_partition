@@ -61,7 +61,6 @@ module TenantPartition
         # Definición de rutas explícitas apuntando al controlador generado
         route "post   '#{folder_name}/tenant_partitions', to: '#{folder_name}/tenant_partitions#create'"
         route "delete '#{folder_name}/tenant_partitions/:id', to: '#{folder_name}/tenant_partitions#destroy'"
-        route "get    '#{folder_name}/tenant_partitions/:id', to: '#{folder_name}/tenant_partitions#show'"
       end
 
       # Muestra instrucciones post-generación en la consola.
