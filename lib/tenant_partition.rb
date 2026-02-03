@@ -91,6 +91,14 @@ module TenantPartition
       end
     end
 
+    # Verifica si la partición ya existe en el sistema (al menos en un modelo).
+    # @param partition_id [String, Integer]
+    # @return [Boolean]
+    def exists?(partition_id)
+      ensure_models_loaded!
+      partitionable_models.any? { |model| model.exists?(partition_id) }
+    end
+
     # =========================================================================
     # GRUPO 2: MANTENIMIENTO Y OPS (Audit & Cleanup)
     # =========================================================================
