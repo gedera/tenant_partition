@@ -43,10 +43,8 @@ module TenantPartition
         infra_class_name = "Partition::#{klass.name}"
         infra_class = infra_class_name.safe_constantize
 
-        # CORRECCIÓN: Uso explícito de && para satisfacer al linter y evitar falsa redundancia
-        if infra_class && infra_class.respond_to?(:partition_key)
-          return infra_class.partition_key
-        end
+        # CORRECCIÓN: respond_to? es seguro en nil, no requiere safe navigation (&.)
+        return infra_class.partition_key if infra_class.respond_to?(:partition_key)
 
         TenantPartition.configuration&.partition_key
       end

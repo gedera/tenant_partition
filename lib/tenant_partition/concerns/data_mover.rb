@@ -3,25 +3,18 @@
 module TenantPartition
   module Concerns
     # Módulo encargado de la migración de datos (Backfilling) entre tablas.
-    # Se extrajo de {TenantPartition::Base} para reducir la complejidad y responsabilidad de la clase base.
+    # Se extrajo de {TenantPartition::Base} para reducir la complejidad.
     module DataMover
       extend ActiveSupport::Concern
 
-      # Mueve registros desde la tabla DEFAULT hacia la partición actual de forma transaccional y por lotes.
-      # Utiliza CTEs (Common Table Expressions) para asegurar atomicidad en el movimiento.
+      # Mueve registros desde la tabla DEFAULT hacia la partición actual.
       #
-      # @param batch_size [Integer] Cantidad de registros a procesar por transacción (Default: 5000).
-      # @return [Integer] La cantidad total de registros movidos exitosamente.
+      # @param batch_size [Integer] Registros por transacción (Default: 5000).
+      # @return [Integer] Total de registros movidos.
       def populate_from_default(batch_size: 5000)
         return 0 unless persisted?
 
-        payload = {
-          partition_key: self.class.partition_key,
-          value: partition_id,
-          parent_table: self.class.parent_table
-        }
-
-        ActiveSupport::Notifications.instrument("populate.tenant_partition", payload) do |evt|
+        ActiveSupport::Notifications.instrument("populate.tenant_partition", instrumentation_payload) do |evt|
           total = perform_batch_move(batch_size)
           evt[:count] = total
           total
@@ -30,9 +23,16 @@ module TenantPartition
 
       private
 
-      # Ejecuta el bucle de movimiento hasta que no queden registros pendientes.
-      # @param batch_size [Integer] Tamaño del lote.
-      # @return [Integer] Total acumulado.
+      # Construye el payload para la instrumentación.
+      def instrumentation_payload
+        {
+          partition_key: self.class.partition_key,
+          value: partition_id,
+          parent_table: self.class.parent_table
+        }
+      end
+
+      # Bucle de movimiento por lotes.
       def perform_batch_move(batch_size)
         total_moved = 0
         loop do
@@ -43,9 +43,7 @@ module TenantPartition
         total_moved
       end
 
-      # Ejecuta una transacción para mover un solo lote de registros.
-      # @param batch_size [Integer] Tamaño del lote.
-      # @return [Integer] Cantidad de filas afectadas en este lote.
+      # Transacción para un solo lote.
       def move_single_batch(batch_size)
         default = self.class.default_table
         parent  = self.class.parent_table
@@ -57,15 +55,15 @@ module TenantPartition
         end
       end
 
-      # Construye y ejecuta la query SQL cruda para el movimiento atómico (DELETE + INSERT).
-      # @param default [String] Tabla origen (default).
-      # @param parent [String] Tabla destino (padre).
-      # @param key [Symbol] Columna de partición.
-      # @param val [Object] Valor del ID de partición.
-      # @param batch_size [Integer] Límite del lote.
-      # @return [Integer] Número de tuplas movidas.
+      # Ejecuta la query SQL.
       def execute_move_query(default, parent, key, val, batch_size)
-        sql = <<~SQL.squish
+        sql = build_move_sql(default, parent, key, val, batch_size)
+        self.class.connection.execute(sql).cmd_tuples
+      end
+
+      # Construye la query SQL compleja (CTE + DELETE + INSERT).
+      def build_move_sql(default, parent, key, val, batch_size)
+        <<~SQL.squish
           WITH moved_rows AS (
             DELETE FROM #{default}
             WHERE #{key} = '#{val}'
@@ -76,7 +74,6 @@ module TenantPartition
           )
           INSERT INTO #{parent} SELECT * FROM moved_rows;
         SQL
-        self.class.connection.execute(sql).cmd_tuples
       end
     end
   end
