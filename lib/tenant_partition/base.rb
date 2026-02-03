@@ -1,24 +1,18 @@
 # frozen_string_literal: true
 
 module TenantPartition
-  # Clase base para la gestión de infraestructura de particionamiento en PostgreSQL.
-  #
-  # Proporciona una interfaz para manejar el ciclo de vida de las tablas físicas (Particiones).
-  #
-  # @abstract Hereda de esta clase para definir un recurso de partición.
-  # @example
-  #   class Partition::Chat < TenantPartition::Base
-  #     # Opcional: Sobrescribir la clave global
-  #     self.partition_key = :region_code
-  #   end
+  # Clase base abstracta para definir modelos de infraestructura de particionamiento.
+  # Provee métodos para manipular tablas físicas (DDL) y mover datos.
   class Base
     include ActiveModel::Model
     include ActiveModel::Attributes
 
-    # Registra el atributo de partición en la subclase en el momento de la herencia.
+    # @!method partition_key
+    #   @return [Symbol] La clave de partición configurada para esta clase.
+
+    # Hook de herencia para definir atributos automáticamente.
     def self.inherited(subclass)
       super
-      # Intentamos definir el atributo por defecto si existe configuración global
       key = TenantPartition.configuration&.partition_key
       subclass.attribute key if key
     end
@@ -26,39 +20,43 @@ module TenantPartition
     class << self
       attr_writer :parent_table, :prefix, :default_table
 
-      # Permite inyectar una clave de partición personalizada por clase
-      attr_writer :partition_key
-
+      # @return [String] Nombre de la tabla padre en la base de datos.
       def parent_table
         @parent_table ||= name.demodulize.underscore.pluralize
       end
 
-      # Prioridad: 1. Clave de la clase, 2. Clave global
+      # @return [Symbol] Clave de partición activa (prioridad a configuración local).
       def partition_key
         @partition_key ||= TenantPartition.configuration&.partition_key ||
-          raise(TenantPartition::Error, "Clave de partición no configurada.")
+                           raise(TenantPartition::Error, "Clave de partición no configurada.")
       end
 
+      # Establece una clave de partición específica para esta clase.
+      # @param value [Symbol] Nombre de la columna.
       def partition_key=(value)
         @partition_key = value
-        attribute value # Define el atributo en ActiveModel automáticamente
+        attribute value
       end
 
+      # @return [String] Prefijo para los nombres de tablas hijas.
       def prefix
         @prefix ||= "#{parent_table}_#{partition_key.to_s.gsub('_id', '')}"
       end
 
+      # @return [String] Nombre de la tabla DEFAULT.
       def default_table
         @default_table ||= "#{parent_table}_default"
       end
 
+      # @return [ActiveRecord::ConnectionAdapters::PostgreSQLAdapter] Conexión a DB.
       def connection
         ActiveRecord::Base.connection
       end
 
-      # Crea físicamente una partición en PostgreSQL.
+      # Crea la partición física para un valor dado.
+      # @param value [String, Integer] Valor del tenant.
+      # @return [TenantPartition::Base] Instancia representando la partición.
       def create(value)
-        # Importante: Usamos el método partition_key (no la variable) para respetar overrides
         payload = { partition_key: partition_key, value: value, table: parent_table }
 
         ActiveSupport::Notifications.instrument("create.tenant_partition", payload) do
@@ -69,11 +67,17 @@ module TenantPartition
         end
       end
 
+      # Genera el nombre de tabla sanitizado para un valor.
+      # @param value [Object] Valor del tenant.
+      # @return [String] Nombre de tabla SQL seguro.
       def partition_name(value)
-        sanitized = value.to_s.gsub('-', '_')
+        sanitized = value.to_s.gsub("-", "_")
         "#{prefix}_#{sanitized}"
       end
 
+      # Verifica existencia física de la tabla en Postgres.
+      # @param value [Object] Valor del tenant.
+      # @return [Boolean]
       def exists?(value)
         name = partition_name(value)
         sql = <<-SQL.squish
@@ -85,6 +89,8 @@ module TenantPartition
         connection.execute(sql).any?
       end
 
+      # Busca una partición existente.
+      # @return [TenantPartition::Base, nil]
       def find(value)
         new(partition_key => value) if exists?(value)
       end
@@ -92,63 +98,42 @@ module TenantPartition
 
     # --- Métodos de Instancia ---
 
+    # @return [Object] Valor actual del ID de partición de esta instancia.
     def partition_id
-      # CORRECCIÓN: Usamos public_send porque ActiveModel no tiene read_attribute
-      # Esto invoca al getter generado dinámicamente (ej: .isp_id)
       public_send(self.class.partition_key)
     end
 
+    # @return [String] Nombre físico de la tabla asociada.
     def partition_table_name
       self.class.partition_name(partition_id)
     end
 
+    # @return [Boolean] Si la tabla física existe.
     def persisted?
       self.class.exists?(partition_id)
     end
 
-    # Mueve registros desde la tabla por defecto hacia la partición atómicamente.
+    # Mueve datos desde la tabla default a esta partición en lotes.
+    # @param batch_size [Integer] Tamaño del lote transaccional.
+    # @return [Integer] Total de registros movidos.
     def populate_from_default(batch_size: 5000)
       return 0 unless persisted?
 
-      parent  = self.class.parent_table
-      default = self.class.default_table
-      key     = self.class.partition_key
-      val     = partition_id
+      key = self.class.partition_key
+      val = partition_id
+      parent = self.class.parent_table
 
       payload = { partition_key: key, value: val, parent_table: parent }
 
       ActiveSupport::Notifications.instrument("populate.tenant_partition", payload) do |notification_payload|
-        total_moved = 0
-
-        loop do
-          batch_count = 0
-          self.class.connection.transaction do
-            # Usamos el ID para paginar el borrado/insertado
-            move_sql = <<-SQL.squish
-              WITH moved_rows AS (
-                DELETE FROM #{default}
-                WHERE #{key} = '#{val}'
-                AND id IN (
-                  SELECT id FROM #{default} WHERE #{key} = '#{val}' LIMIT #{batch_size}
-                )
-                RETURNING *
-              )
-              INSERT INTO #{parent} SELECT * FROM moved_rows;
-            SQL
-
-            result = self.class.connection.execute(move_sql)
-            batch_count = result.cmd_tuples
-          end
-
-          total_moved += batch_count
-          break if batch_count < batch_size
-        end
-
+        total_moved = perform_batch_move(batch_size)
         notification_payload[:count] = total_moved
         total_moved
       end
     end
 
+    # Elimina la tabla física (DDL).
+    # @return [Boolean] true si se eliminó correctamente.
     def destroy
       return false unless persisted?
 
@@ -162,6 +147,40 @@ module TenantPartition
       true
     rescue ActiveRecord::StatementInvalid
       false
+    end
+
+    private
+
+    def perform_batch_move(batch_size)
+      total_moved = 0
+      loop do
+        batch_count = move_single_batch(batch_size)
+        total_moved += batch_count
+        break if batch_count < batch_size
+      end
+      total_moved
+    end
+
+    def move_single_batch(batch_size)
+      default = self.class.default_table
+      parent  = self.class.parent_table
+      key     = self.class.partition_key
+      val     = partition_id
+
+      self.class.connection.transaction do
+        move_sql = <<-SQL.squish
+          WITH moved_rows AS (
+            DELETE FROM #{default}
+            WHERE #{key} = '#{val}'
+            AND id IN (
+              SELECT id FROM #{default} WHERE #{key} = '#{val}' LIMIT #{batch_size}
+            )
+            RETURNING *
+          )
+          INSERT INTO #{parent} SELECT * FROM moved_rows;
+        SQL
+        self.class.connection.execute(move_sql).cmd_tuples
+      end
     end
   end
 end
