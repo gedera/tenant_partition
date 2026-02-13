@@ -2,15 +2,12 @@
 
 module TenantPartition
   module Concerns
-    # Módulo encargado de la migración de datos (Backfilling) entre tablas.
-    # Se extrajo de {TenantPartition::Base} para desacoplar la lógica de movimiento de datos.
+    # Funcionalidad para mover registros desde la tabla DEFAULT hacia su partición correspondiente.
+    # Utilizado principalmente en tareas de mantenimiento y recuperación de datos.
     module DataMover
       extend ActiveSupport::Concern
 
-      # Query SQL parametrizada para el movimiento atómico (DELETE + INSERT).
-      # Se define como constante para evitar la ofensa Metrics/MethodLength de RuboCop
-      # y mejorar la performance evitando la re-asignación de memoria en cada llamada.
-      # @api private
+      # SQL optimizado para mover datos en masa (CTE + DELETE/INSERT).
       MOVE_SQL = <<~SQL.squish.freeze
         WITH moved_rows AS (
           DELETE FROM %<default>s
@@ -24,14 +21,12 @@ module TenantPartition
       SQL
       private_constant :MOVE_SQL
 
-      # Mueve registros desde la tabla DEFAULT hacia la partición actual.
-      # Utiliza transacciones por lotes para evitar bloqueos prolongados en la base de datos.
+      # Mueve registros pertenecientes a este tenant desde la tabla Default a la partición.
+      # Se ejecuta en lotes para no bloquear la base de datos.
       #
-      # @param batch_size [Integer] Cantidad de registros por transacción (Default: 5000).
-      # @return [Integer] La cantidad total de registros movidos exitosamente.
+      # @param batch_size [Integer] Tamaño del lote (default: 5000).
+      # @return [Integer] Cantidad total de registros movidos.
       def populate_from_default(batch_size: 5000)
-        return 0 unless persisted?
-
         ActiveSupport::Notifications.instrument("populate.tenant_partition", instrumentation_payload) do |evt|
           total = perform_batch_move(batch_size)
           evt[:count] = total
@@ -41,19 +36,19 @@ module TenantPartition
 
       private
 
-      # Construye el payload de datos para la instrumentación de ActiveSupport.
-      # @return [Hash] Datos del contexto de la migración.
       def instrumentation_payload
         {
-          partition_key: self.class.partition_key,
+          partition_key: self.class.partition_key_column,
           value: partition_id,
-          parent_table: self.class.parent_table
+          parent_table: self.class.table_name
         }
       end
 
-      # Ejecuta el bucle de movimiento hasta que no queden registros pendientes.
-      # @param batch_size [Integer] Tamaño del lote.
-      # @return [Integer] Total acumulado de registros movidos.
+      # Obtiene el valor del ID de partición de la instancia actual.
+      def partition_id
+        public_send(self.class.partition_key_column)
+      end
+
       def perform_batch_move(batch_size)
         total_moved = 0
         loop do
@@ -64,26 +59,18 @@ module TenantPartition
         total_moved
       end
 
-      # Ejecuta una transacción atómica para mover un solo lote de registros.
-      # @param batch_size [Integer] Tamaño del lote.
-      # @return [Integer] Cantidad de filas afectadas (cmd_tuples).
       def move_single_batch(batch_size)
         self.class.connection.transaction do
-          # Kernel#format es más rápido y seguro que la interpolación directa para templates
           sql = format(MOVE_SQL, move_query_params(batch_size))
           self.class.connection.execute(sql).cmd_tuples
         end
       end
 
-      # Prepara los parámetros para inyectar en la plantilla SQL.
-      # Se extrajo a un método separado para reducir la longitud de `move_single_batch`.
-      # @param batch_size [Integer] Tamaño del lote.
-      # @return [Hash] Parámetros formateados para Kernel#format.
       def move_query_params(batch_size)
         {
-          default: self.class.default_table,
-          parent: self.class.parent_table,
-          key: self.class.partition_key,
+          default: self.class.default_partition_table_name,
+          parent: self.class.table_name,
+          key: self.class.partition_key_column,
           val: partition_id,
           batch_size: batch_size
         }
