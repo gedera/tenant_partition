@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [0.2.1] - 2026-02-13
+### Added
+- **Mejora en Migraciones:** El helper `create_partitioned_table` ahora acepta la opción `id_type: :uuid` o `id_type: :bigint` (por defecto). Esto permite usar particionamiento con IDs enteros seriales estándar o UUIDs según la necesidad del proyecto.
+
 ## [0.2.0] - 2026-02-13
 ### Changed (Breaking Changes)
 - **Arquitectura:** Se eliminó la clase `TenantPartition::Base` y la necesidad de crear modelos de infraestructura en el namespace `Partition::`.
