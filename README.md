@@ -1,25 +1,19 @@
 # TenantPartition
 
-**TenantPartition** es un framework de infraestructura para Ruby on Rails (7.1+) diseñado para simplificar y automatizar la gestión de **Particionamiento por Lista (List Partitioning)** nativo de PostgreSQL.
+**TenantPartition** es una solución robusta y "Rails-native" para implementar **Particionamiento Declarativo (List Partitioning)** de PostgreSQL en aplicaciones Ruby on Rails.
 
-Específicamente construido para arquitecturas **Multi-tenant**, este framework resuelve la complejidad de:
-1.  **Composite Primary Keys (CPK):** Configuración automática de claves compuestas (`id` + `partition_key`) requeridas por ActiveRecord para soportar particionamiento.
-2.  **Orquestación Centralizada:** Una única interfaz para crear y eliminar particiones en **todos** los modelos de la aplicación simultáneamente.
-3.  **Mantenimiento Zero-Downtime:** Migración atómica de datos "huérfanos" (que cayeron en la tabla `DEFAULT`) hacia sus particiones correctas sin perder servicio.
+A diferencia de otras soluciones que dependen de esquemas (schemas) o hackeos a la conexión de base de datos, `tenant_partition` utiliza características nativas de PostgreSQL para dividir tablas gigantes en tablas físicas más pequeñas por tenant (Cliente, ISP, Organización, etc.), manteniendo la experiencia de desarrollo de ActiveRecord estándar.
 
 ## 🚀 Características Principales
 
-* **Fachada de Servicio:** API unificada (`TenantPartition.create!`, `destroy!`, `audit`, `cleanup!`) para gestionar el ciclo de vida completo de los tenants.
-* **Introspección Inteligente:** Los modelos de negocio detectan automáticamente su configuración de infraestructura por convención (ej: `User` -> `Partition::User`).
-* **Migration DSL:** Helper `create_partitioned_table` para definir tablas particionadas y sus tablas `DEFAULT` en una sola instrucción.
-* **Seguridad Estricta:** Concern para controladores que valida Headers HTTP (`X-Tenant-ID`) para asegurar el contexto del tenant.
-* **Observabilidad:** Instrumentación integrada con `ActiveSupport::Notifications`.
+* **API Simple (Opt-in):** Usa `partition_table` en tus modelos para activar la magia.
+* **Soporte Nativo CPK:** Compatible con **Composite Primary Keys** de Rails 7.1+.
+* **Sin Magic Strings:** Usa métodos explícitos (`create_partition`, `drop_partition`).
+* **Gestión de Datos Huérfanos:** Herramientas para mover datos de la tabla "Default" a su partición correcta automáticamente.
+* **Safety Guards:** Protección contra borrados accidentales en Producción.
+* **Tasks de Mantenimiento:** Rake tasks integradas para auditoría y limpieza.
 
-## 📋 Requisitos
-
-* **Ruby:** >= 3.2
-* **Ruby on Rails:** >= 7.1
-* **PostgreSQL:** >= 13.0 (Requerido para `gen_random_uuid()` nativo)
+---
 
 ## 📦 Instalación
 
@@ -29,183 +23,178 @@ Agrega esto a tu `Gemfile`:
 gem 'tenant_partition'
 ```
 
-Luego ejecuta:
+Y ejecuta:
 
 ```bash
 bundle install
 ```
 
+---
+
 ## ⚙️ Configuración
 
-Crea un inicializador en `config/initializers/tenant_partition.rb`. Es **obligatorio** definir la clave de partición.
+Crea un inicializador para definir tu clave de partición global (por ejemplo, `:isp_id`, `:account_id`, `:tenant_id`).
 
 ```ruby
-TenantPartition.configure do |config|
-  # 1. La columna que discrimina los tenants (ej: :isp_id, :account_id, :tenant_id)
-  config.partition_key = :isp_id
+# config/initializers/tenant_partition.rb
 
-  # 2. El Header HTTP para la seguridad en controladores API
-  config.header_name   = 'X-Tenant-ID'
+TenantPartition.configure do |config|
+  # Esta es la columna que actuará como discriminador global
+  config.partition_key = :isp_id
 end
 ```
+
+### Habilitar en ApplicationRecord (Recomendado)
+
+Para tener disponible la macro en todos tus modelos, incluye el concern en tu modelo base. **No te preocupes, esto no particiona nada por defecto.**
+
+```ruby
+# app/models/application_record.rb
+class ApplicationRecord < ActiveRecord::Base
+  primary_abstract_class
+  
+  # Habilita la macro 'partition_table', pero no se activa 
+  # hasta que la llames explícitamente en una subclase.
+  include TenantPartition::Concerns::Partitioned
+end
+```
+
+---
 
 ## 🛠 Guía de Uso
 
-### 1. Migraciones (Crear las Tablas)
+### 1. Migración de Base de Datos
 
-Usa el helper `create_partitioned_table`. Este método deshabilita el ID automático simple y configura una **Primary Key Compuesta** (`[:id, :partition_key]`) necesaria para que PostgreSQL permita el particionamiento.
+PostgreSQL necesita que la tabla padre se cree con la opción `PARTITION BY LIST`. Además, **debes incluir la partition key en la Primary Key**.
 
 ```ruby
 class CreateConversations < ActiveRecord::Migration[7.1]
-  def change
-    create_partitioned_table :conversations do |t|
-      # No definas t.primary_key. La gema crea (id, isp_id) automáticamente.
-      t.string :topic
+  def up
+    # 1. Crear la tabla padre particionada
+    # Nota: id: false porque definiremos una CPK manual
+    create_table :conversations, id: false, options: "PARTITION BY LIST (isp_id)" do |t|
+      t.bigserial :id, null: false
+      t.integer :isp_id, null: false # Tu partition key
+      
+      t.string :subject
+      t.text :body
       t.timestamps
     end
+
+    # 2. Definir la Primary Key Compuesta (Requerido por Postgres para particionar)
+    execute "ALTER TABLE conversations ADD PRIMARY KEY (id, isp_id);"
+
+    # 3. Crear una tabla DEFAULT (Opcional pero recomendado para datos huérfanos)
+    execute "CREATE TABLE conversations_default PARTITION OF conversations DEFAULT;"
+  end
+
+  def down
+    drop_table :conversations
   end
 end
 ```
 
-### 2. Capa de Infraestructura (Modelos Partition)
+### 2. Configurar el Modelo
 
-Define modelos que hereden de `TenantPartition::Base`. Estos modelos son responsables de las operaciones DDL (Create/Drop tables). Por convención, se recomienda usar el namespace `Partition::`.
-
-```ruby
-# app/models/partition/conversation.rb
-module Partition
-  class Conversation < TenantPartition::Base
-    # Hereda la configuración global (:isp_id) automáticamente.
-  end
-end
-```
-
-### 3. Capa de Negocio (Modelos Rails)
-
-En tus modelos estándar (`ApplicationRecord`), incluye el concern `Partitioned`.
-
-**Magia de Introspección:**
-Al incluir el concern, la gema busca automáticamente si existe un modelo de infraestructura asociado (ej: `Partition::Conversation`) y hereda su configuración.
+Usa la macro `partition_table` para activar la funcionalidad.
 
 ```ruby
 # app/models/conversation.rb
 class Conversation < ApplicationRecord
-  include TenantPartition::Concerns::Partitioned
-
-  # ¡Listo! Rails ahora sabe que la Primary Key es [:id, :isp_id]
-  # y aplica scopes automáticos.
+  # ¡Esto es todo! 
+  # Automáticamente configura la Primary Key compuesta [:id, :isp_id]
+  # y los scopes necesarios.
+  partition_table 
 end
 ```
 
-### 4. Orquestación (Ciclo de Vida del Tenant)
-
-Ya no necesitas crear particiones tabla por tabla. Usa la **Fachada** `TenantPartition` para gestionar la infraestructura de un tenant en **todos** los modelos registrados simultáneamente.
-
-**Crear un nuevo Tenant (Provisioning):**
-Ideal para usar en tu `RegistrationService` o `AfterCommit` de la creación del tenant.
-
+#### ¿Necesitas una key diferente para un solo modelo?
 ```ruby
-# En tu Service Object o Controller de registro
-def create_tenant
-  isp = Isp.create!(params)
-
-  # Busca TODOS los modelos particionados y crea las tablas físicas para este ID.
-  # Es idempotente: si alguna ya existe, la salta sin error.
-  TenantPartition.create!(isp.id)
+class AuditLog < ApplicationRecord
+  # Este modelo se particiona por año, ignorando la config global
+  partition_table key: :year
 end
 ```
 
-**Eliminar un Tenant (Deprovisioning):**
+### 3. Crear y Eliminar Tenants
+
+Gestiona el ciclo de vida de las particiones utilizando los métodos de clase inyectados. Esto es ideal para callbacks en tu modelo `Tenant` o `Isp`.
 
 ```ruby
-# Esta operación realiza DETACH + DROP de las tablas físicas.
-# ¡Es destructiva e irreversible!
-TenantPartition.destroy!(old_isp.id)
+# Ejemplo: Crear partición para el ISP con ID 100
+Conversation.create_partition(100)
+# => Crea la tabla física "conversations_isp_100"
+
+# Verificar si existe
+Conversation.partition_table_exists?(100)
+# => true
+
+# Eliminar partición (CUIDADO: Borra datos)
+Conversation.drop_partition(100)
+# => Elimina "conversations_isp_100"
 ```
 
-### 5. Generador de API (Provisioning)
-
-Para facilitar la integración con sistemas externos, la gema incluye un generador que crea un controlador base con las acciones `create`, `destroy` y `show` para tus tenants.
-
-**Uso Básico (Namespace por defecto `TenantPartition`):**
-
-```bash
-bundle exec rails g tenant_partition:api_controller
-# Crea: app/controllers/tenant_partition/tenant_partitions_controller.rb
-# Ruta: POST /tenant_partition/tenant_partitions
-```
-
-### 6. Seguridad en Controladores
-
-Protege tus API endpoints asegurando que siempre reciban el ID del tenant.
+#### Ejemplo en un Callback de ISP:
 
 ```ruby
-class ApiController < ActionController::API
-  include TenantPartition::Concerns::Controller
-
-  # Valida que el request traiga el header 'X-Tenant-ID'.
-  # Devuelve 400 Bad Request si falta.
-  before_action :require_partition_key!
-
-  def index
-    # current_partition_id contiene el valor seguro del Header
-    @chats = Conversation.for_partition(current_partition_id).all
-    render json: @chats
+# app/models/isp.rb
+class Isp < ApplicationRecord
+  after_create :provision_partitions
+  
+  def provision_partitions
+    # Helper global para crear particiones en TODOS los modelos registrados
+    TenantPartition.create!(self.id)
   end
 end
 ```
 
-## 🛡 Mantenimiento y Recuperación
+---
 
-TenantPartition maneja el escenario de "Race Condition" donde llegan datos *antes* de que la partición exista. Esos datos caen automáticamente en la tabla `_default`.
+## 🧹 Mantenimiento y Datos Huérfanos
+
+Si insertas datos con un `isp_id` para el cual no has creado una partición (y tienes una tabla `DEFAULT`), los datos caerán ahí. `TenantPartition` incluye herramientas para moverlos a su lugar correcto.
 
 ### Auditoría
+Verifica si tienes datos en las tablas default:
 
-Verifica si tienes datos "fugados" en las tablas default:
-
-```ruby
-# Desde consola Rails
-report = TenantPartition.audit
-# => { "Partition::Conversation" => 14, "Partition::Message" => 0 }
-```
-
-O vía Rake task:
 ```bash
-bundle exec rails tenant_partition:audit
+bundle exec rake tenant_partition:audit
+# [TenantPartition] [AUDIT] Iniciando auditoría...
+# [TenantPartition] [ALERTA] Conversation: 450 registros huérfanos encontrados.
 ```
 
 ### Limpieza (Cleanup)
+Crea las particiones faltantes y mueve los datos automáticamente:
 
-Mueve los datos huérfanos a sus particiones correspondientes de forma atómica y segura.
-
-```ruby
-# Ruby API (Ideal para Jobs nocturnos)
-TenantPartition.cleanup!
-```
-
-O vía Rake task:
 ```bash
-bundle exec rails tenant_partition:cleanup
+bundle exec rake tenant_partition:cleanup
+# [TenantPartition] [FIX] Conversation: Procesando 2 tenants con datos huérfanos.
+# [TenantPartition] [MOVE] -> ID 101: 450 registros recuperados.
 ```
 
-## 📊 Observabilidad
-
-Puedes suscribirte a los eventos para enviar métricas a tu sistema de monitoreo (Datadog, Prometheus, NewRelic).
+También puedes hacerlo manualmente desde la consola:
 
 ```ruby
-# config/initializers/notifications.rb
-ActiveSupport::Notifications.subscribe(/tenant_partition/) do |name, start, finish, id, payload|
-  duration = (finish - start) * 1000
-
-  case name
-  when "create.tenant_partition"
-    Rails.logger.info "📦 Partición creada: #{payload[:table]} para #{payload[:value]}"
-  when "populate.tenant_partition"
-    Rails.logger.info "🧹 Limpieza: #{payload[:count]} registros movidos en #{duration.round(2)}ms"
-  end
-end
+# Mueve datos del tenant 101 desde Default hacia su partición
+Conversation.create_partition(101) # Asegurar que existe destino
+mover = Conversation.new(isp_id: 101)
+mover.populate_from_default
 ```
 
-## 📄 Licencia
+---
 
-Este proyecto está disponible como código abierto bajo los términos de la [Licencia MIT](https://opensource.org/licenses/MIT).
+## 🛡️ Producción y Seguridad
+
+La gema incluye un `SafetyGuard` que impide ejecutar comandos destructivos (`drop_partition`, `destroy!`) en entorno de producción a menos que se fuerce explícitamente.
+
+Para ejecutar tareas destructivas en producción, debes setear la variable de entorno:
+
+```bash
+DISABLE_TENANT_PARTITION_GUARD=true bundle exec rake tenant_partition:destroy_tenant[123]
+```
+
+---
+
+## License
+
+The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
