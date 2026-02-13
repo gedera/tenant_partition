@@ -23,48 +23,42 @@ module TenantPartition
         # @param key [Symbol, nil] La columna clave de partición. Si es nil, usa la global.
         # @return [void]
         def partition_table(key: nil)
-          # 1. Resolver y guardar la clave de partición
           resolved_key = key || TenantPartition.configuration.partition_key
 
           # Guardamos la key en una variable de instancia de clase para acceso rápido
           @partition_key_column = resolved_key
 
-          # 2. Registrar este modelo en el sistema
+          # Registrar este modelo en el sistema
           TenantPartition.register_model(self)
 
-          # 3. Configurar Primary Key Compuesta (Soporte Rails 7.1+)
-          # Aseguramos que la PK incluya la partition key para unicidad global
+          # Configurar Primary Key Compuesta (Soporte Rails 7.1+)
           self.primary_key = [:id, resolved_key]
 
-          # 4. Inyectar Scopes Automáticos
+          # Inyectar Scopes Automáticos
           scope :for_partition, ->(val) { where(resolved_key => val) }
 
-          # 5. Inyectar lógica de infraestructura (CREATE/DROP tables)
+          # Inyectar lógica de infraestructura y movimiento de datos
           extend ManagementMethods
-
-          # 6. Incluir utilidades de movimiento de datos (si las usas)
           include TenantPartition::Concerns::DataMover
         end
 
-        # Devuelve el nombre de la columna usada para particionar.
+        # Devuelve el nombre de la columna usada para particionar este modelo.
         # @return [Symbol]
         def partition_key_column
           @partition_key_column
         end
       end
 
-      # Módulo que contiene la lógica de infraestructura (DDL).
-      # Estos métodos se agregan como métodos de CLASE al modelo solo cuando se llama a partition_table.
+      # Métodos de gestión de infraestructura (DDL) inyectados como métodos de clase.
       module ManagementMethods
         # Crea físicamente la partición en la base de datos para un valor dado.
         #
         # @param value [String, Integer] El valor del tenant (ej: ID del ISP).
         # @return [void]
-        # @raise [ActiveRecord::StatementInvalid] Si falla el SQL.
+        # @raise [ActiveRecord::StatementInvalid] Si falla la ejecución SQL.
         def create_partition(value)
           table_name_for_partition = partition_table_name(value)
 
-          # Payload para instrumentación (logs/metrics)
           payload = {
             partition_key: partition_key_column,
             value: value,
@@ -102,7 +96,6 @@ module TenantPartition
           suffix = partition_key_column.to_s.gsub("_id", "")
 
           # Formato: nombre_tabla_sufijo_valor
-          # Ej: conversations_isp_10
           "#{table_name}_#{suffix}_#{sanitized_value}"
         end
 
