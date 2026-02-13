@@ -57,7 +57,7 @@ Incluye el concern en `ApplicationRecord`. Esto **NO** particiona tus tablas, so
 # app/models/application_record.rb
 class ApplicationRecord < ActiveRecord::Base
   primary_abstract_class
-  
+
   # Habilita la herramienta, pero permanece inactiva por defecto.
   include TenantPartition::Concerns::Partitioned
 end
@@ -87,8 +87,8 @@ Es el interruptor de encendido. Debe llamarse al inicio de la definición del mo
 ```ruby
 class Conversation < ApplicationRecord
   # Uso estándar (usa la key configurada globalmente, ej: :isp_id)
-  partition_table 
-  
+  partition_table
+
   # Uso personalizado (para modelos con keys únicas, ej: :year)
   # partition_table key: :year
 end
@@ -126,7 +126,7 @@ class CreateConversations < ActiveRecord::Migration[7.1]
     create_table :conversations, id: false, options: "PARTITION BY LIST (isp_id)" do |t|
       t.bigserial :id, null: false
       t.integer :isp_id, null: false # Tu partition key
-      
+
       t.string :subject
       t.timestamps
     end
@@ -148,7 +148,7 @@ Es común automatizar la creación de particiones cuando se crea un nuevo Tenant
 # app/models/isp.rb
 class Isp < ApplicationRecord
   after_create :provision_infrastructure
-  
+
   def provision_infrastructure
     # Método helper que crea las particiones en TODOS los modelos registrados
     TenantPartition.create!(self.id)

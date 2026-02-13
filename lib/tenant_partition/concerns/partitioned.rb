@@ -66,7 +66,10 @@ module TenantPartition
           }
 
           ActiveSupport::Notifications.instrument("create.tenant_partition", payload) do
-            sql = "CREATE TABLE IF NOT EXISTS #{table_name_for_partition} PARTITION OF #{table_name} FOR VALUES IN ('#{value}');"
+            sql = <<~SQL.squish
+              CREATE TABLE IF NOT EXISTS #{table_name_for_partition}
+              PARTITION OF #{table_name} FOR VALUES IN ('#{value}');
+            SQL
             connection.execute(sql)
           end
         end

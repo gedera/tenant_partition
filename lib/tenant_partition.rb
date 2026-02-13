@@ -114,6 +114,7 @@ module TenantPartition
 
     def ensure_models_loaded!
       return unless defined?(Rails) && !Rails.configuration.eager_load
+
       Rails.application.eager_load!
     end
 
