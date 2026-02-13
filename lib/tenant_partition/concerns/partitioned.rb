@@ -1,63 +1,133 @@
 # frozen_string_literal: true
 
+require_relative "data_mover"
+
 module TenantPartition
   module Concerns
-    # Concern para modelos Rails (ApplicationRecord).
-    # Configura automáticamente las claves primarias compuestas y scopes.
+    # Concern principal para dotar a un modelo ActiveRecord de capacidades de particionamiento.
+    #
+    # Al incluir este concern en ApplicationRecord, los modelos obtienen acceso a la macro
+    # {.partition_table}, la cual activa la lógica de partición, configura la clave primaria
+    # compuesta y añade métodos de gestión de tablas (DDL).
     module Partitioned
       extend ActiveSupport::Concern
 
-      included do
-        TenantPartition::Concerns::Partitioned.configure_model(self)
-      end
-
       class_methods do
-        # Intercepta la herencia para autoconfigurar subclases.
-        def inherited(subclass)
-          super
-          TenantPartition::Concerns::Partitioned.configure_model(subclass)
+        # Macro para activar el particionamiento en el modelo actual.
+        #
+        # @example Activar partición por ISP
+        #   class Conversation < ApplicationRecord
+        #     partition_table key: :isp_id
+        #   end
+        #
+        # @param key [Symbol, nil] La columna clave de partición. Si es nil, usa la global.
+        # @return [void]
+        def partition_table(key: nil)
+          # 1. Resolver y guardar la clave de partición
+          resolved_key = key || TenantPartition.configuration.partition_key
+
+          # Guardamos la key en una variable de instancia de clase para acceso rápido
+          @partition_key_column = resolved_key
+
+          # 2. Registrar este modelo en el sistema
+          TenantPartition.register_model(self)
+
+          # 3. Configurar Primary Key Compuesta (Soporte Rails 7.1+)
+          # Aseguramos que la PK incluya la partition key para unicidad global
+          self.primary_key = [:id, resolved_key]
+
+          # 4. Inyectar Scopes Automáticos
+          scope :for_partition, ->(val) { where(resolved_key => val) }
+
+          # 5. Inyectar lógica de infraestructura (CREATE/DROP tables)
+          extend ManagementMethods
+
+          # 6. Incluir utilidades de movimiento de datos (si las usas)
+          include TenantPartition::Concerns::DataMover
         end
 
-        # Permite definir manualmente la clave de partición para este modelo.
-        # @param key [Symbol] Nombre de la columna.
-        def partitioned_by(key)
-          TenantPartition::Concerns::Partitioned.apply_configuration(self, key)
+        # Devuelve el nombre de la columna usada para particionar.
+        # @return [Symbol]
+        def partition_key_column
+          @partition_key_column
         end
       end
 
-      # Configura el modelo detectando la clave de partición adecuada.
-      # @api private
-      # @param klass [Class] El modelo a configurar.
-      def self.configure_model(klass)
-        return if klass.respond_to?(:abstract_class?) && klass.abstract_class?
+      # Módulo que contiene la lógica de infraestructura (DDL).
+      # Estos métodos se agregan como métodos de CLASE al modelo solo cuando se llama a partition_table.
+      module ManagementMethods
+        # Crea físicamente la partición en la base de datos para un valor dado.
+        #
+        # @param value [String, Integer] El valor del tenant (ej: ID del ISP).
+        # @return [void]
+        # @raise [ActiveRecord::StatementInvalid] Si falla el SQL.
+        def create_partition(value)
+          table_name_for_partition = partition_table_name(value)
 
-        key_to_use = resolve_partition_key(klass)
-        apply_configuration(klass, key_to_use) if key_to_use.present?
-      end
+          # Payload para instrumentación (logs/metrics)
+          payload = {
+            partition_key: partition_key_column,
+            value: value,
+            parent_table: table_name
+          }
 
-      # Resuelve la clave de partición mediante introspección o configuración global.
-      # @api private
-      # @param klass [Class] El modelo a inspeccionar.
-      # @return [Symbol, nil] La clave encontrada.
-      def self.resolve_partition_key(klass)
-        infra_class_name = "Partition::#{klass.name}"
-        infra_class = infra_class_name.safe_constantize
+          ActiveSupport::Notifications.instrument("create.tenant_partition", payload) do
+            sql = "CREATE TABLE IF NOT EXISTS #{table_name_for_partition} PARTITION OF #{table_name} FOR VALUES IN ('#{value}');"
+            connection.execute(sql)
+          end
+        end
 
-        # CORRECCIÓN: respond_to? es seguro en nil, no requiere safe navigation (&.)
-        return infra_class.partition_key if infra_class.respond_to?(:partition_key)
+        # Elimina (DROP) la partición asociada al valor dado.
+        # Realiza un DETACH primero para seguridad y luego DROP.
+        #
+        # @param value [String, Integer] El valor del tenant.
+        # @return [void]
+        def drop_partition(value)
+          partition_name = partition_table_name(value)
 
-        TenantPartition.configuration&.partition_key
-      end
+          return unless partition_table_exists?(value)
 
-      # Aplica la configuración de CPK y scopes al modelo.
-      # @api private
-      # @param klass [Class] El modelo.
-      # @param key [Symbol] La clave de partición.
-      def self.apply_configuration(klass, key)
-        return if klass.primary_key.is_a?(Array) && klass.primary_key.include?(key.to_s)
+          connection.transaction do
+            connection.execute("ALTER TABLE #{table_name} DETACH PARTITION #{partition_name};")
+            connection.execute("DROP TABLE IF EXISTS #{partition_name};")
+          end
+        end
 
-        klass.primary_key = [:id, key]
-        klass.scope :for_partition, ->(value) { where(key => value) }
+        # Genera el nombre de la tabla física para una partición específica.
+        #
+        # @param value [Object] El valor del tenant.
+        # @return [String] Nombre de la tabla (ej: 'conversations_isp_1').
+        def partition_table_name(value)
+          sanitized_value = value.to_s.gsub("-", "_")
+          suffix = partition_key_column.to_s.gsub("_id", "")
+
+          # Formato: nombre_tabla_sufijo_valor
+          # Ej: conversations_isp_10
+          "#{table_name}_#{suffix}_#{sanitized_value}"
+        end
+
+        # Verifica si la tabla de la partición existe en el catálogo de PostgreSQL.
+        #
+        # @param value [Object] El valor del tenant.
+        # @return [Boolean]
+        def partition_table_exists?(value)
+          child_table = partition_table_name(value)
+
+          sql = <<~SQL.squish
+            SELECT 1 FROM pg_class c
+            JOIN pg_inherits i ON c.oid = i.inhrelid
+            JOIN pg_class p ON i.inhparent = p.oid
+            WHERE p.relname = '#{table_name}' AND c.relname = '#{child_table}';
+          SQL
+
+          connection.execute(sql).any?
+        end
+
+        # Nombre de la tabla DEFAULT (para valores que no caen en ninguna partición).
+        # @return [String]
+        def default_partition_table_name
+          "#{table_name}_default"
+        end
       end
     end
   end
