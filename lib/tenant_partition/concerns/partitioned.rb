@@ -57,20 +57,10 @@ module TenantPartition
         # @return [void]
         # @raise [ActiveRecord::StatementInvalid] Si falla la ejecución SQL.
         def create_partition(value)
-          table_name_for_partition = partition_table_name(value)
-
-          payload = {
-            partition_key: partition_key_column,
-            value: value,
-            parent_table: table_name
-          }
+          payload = create_partition_payload(value)
 
           ActiveSupport::Notifications.instrument("create.tenant_partition", payload) do
-            sql = <<~SQL.squish
-              CREATE TABLE IF NOT EXISTS #{table_name_for_partition}
-              PARTITION OF #{table_name} FOR VALUES IN ('#{value}');
-            SQL
-            connection.execute(sql)
+            execute_create_partition_sql(value)
           end
         end
 
@@ -123,6 +113,25 @@ module TenantPartition
         # @return [String]
         def default_partition_table_name
           "#{table_name}_default"
+        end
+
+        private
+
+        def create_partition_payload(value)
+          {
+            partition_key: partition_key_column,
+            value: value,
+            parent_table: table_name
+          }
+        end
+
+        def execute_create_partition_sql(value)
+          table_name_for_partition = partition_table_name(value)
+          sql = <<~SQL.squish
+            CREATE TABLE IF NOT EXISTS #{table_name_for_partition}
+            PARTITION OF #{table_name} FOR VALUES IN ('#{value}');
+          SQL
+          connection.execute(sql)
         end
       end
     end
