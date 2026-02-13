@@ -2,58 +2,63 @@
 
 module TenantPartition
   module Schema
-    # Módulo que extiende ActiveRecord::Migration con DSL para particionamiento.
     module Statements
       # Crea una tabla particionada por lista y su tabla DEFAULT asociada.
-      # Configura automáticamente Primary Keys Compuestas para compatibilidad con Postgres.
       #
       # @param table_name [Symbol] Nombre de la tabla.
-      # @param options [Hash] Opciones de migración estándar.
-      # @option options [Symbol] :partition_key Clave opcional para sobreescribir la global.
-      # @yield [t] Bloque de definición de tabla (ActiveRecord::ConnectionAdapters::TableDefinition).
+      # @param options [Hash] Opciones.
+      # @option options [Symbol] :partition_key Clave de partición (ej: :isp_id).
+      # @option options [Symbol] :id_type Tipo de ID (:uuid o :bigint). Default: :bigint.
       def create_partitioned_table(table_name, **options, &block)
         key = options.delete(:partition_key) || TenantPartition.configuration&.partition_key
+        id_type = options.delete(:id_type) || :bigint # Default a BigInt para ser conservadores
+
         raise TenantPartition::Error, "Falta 'partition_key'." unless key
 
+        # Configuramos id: false y las opciones de partición
         configure_pk_and_options(options, key)
 
         create_table(table_name, **options) do |t|
-          setup_partitioning(t, key, block)
+          setup_partitioning(t, key, id_type, block)
         end
 
         create_default_partition(table_name)
       end
 
-      # Elimina una tabla particionada en cascada.
-      # @param table_name [Symbol] Nombre de la tabla.
       def drop_partitioned_table(table_name)
         drop_table(table_name, cascade: true)
       end
 
       private
 
-      # Configura las columnas y definiciones dentro del bloque create_table.
-      def setup_partitioning(table, key, block)
-        table.uuid :id, null: false, default: -> { "gen_random_uuid()" }
+      def setup_partitioning(table, key, id_type, block)
+        # Definimos la ID según la preferencia
+        if id_type == :uuid
+          table.uuid :id, null: false, default: -> { "gen_random_uuid()" }
+        else
+          table.bigserial :id, null: false
+        end
+
+        # Ejecutamos el bloque del usuario (columnas)
         block.call(table)
+
+        # Aseguramos que la columna de partición exista
         ensure_partition_column(table, key)
       end
 
-      # Prepara las opciones de PK compuesta y tipo de partición.
       def configure_pk_and_options(options, key)
         options[:id] = false
         options[:primary_key] = [:id, key]
         options[:options] = "PARTITION BY LIST (#{key})"
       end
 
-      # Asegura que la columna de partición exista si el usuario olvidó definirla.
       def ensure_partition_column(table, key)
         return if table.columns.any? { |c| c.name == key.to_s }
-
-        table.column key, :string, null: false
+        # Si no la definió el usuario, asumimos integer.
+        # Si fuera string/uuid el usuario debería definirla explícitamente en el bloque.
+        table.integer key, null: false
       end
 
-      # Crea la tabla _default para capturar datos sin partición asignada.
       def create_default_partition(table_name)
         default_name = "#{table_name}_default"
         execute <<-SQL.squish
