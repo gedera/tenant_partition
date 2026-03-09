@@ -10,7 +10,7 @@ A diferencia de otras soluciones multi-tenant que dependen de múltiples esquema
 * **Zero-Downtime Migrations:** Herramientas de nivel empresarial para migrar tablas masivas en producción sin detener el servicio.
 * **Introspección de Esquemas:** Clonación dinámica de tablas legacy (`create_partitioned_table_from`) sin necesidad de escribir las columnas a mano.
 * **Sincronización en Tiempo Real (Live Sync):** Triggers de base de datos automatizados con resolución de conflictos (`UPSERT`) integrada.
-* **Backfill Engine:** Motor de copiado de datos en segundo plano optimizado en memoria, con soporte de paginación por tuplas para UUIDs y BigInts.
+* **Backfill Engine con Auto-Aprovisionamiento JIT:** Motor de copiado en segundo plano que crea automáticamente las particiones hijas al vuelo (Just-In-Time) a medida que descubre nuevos tenants en el historial.
 * **Soporte Nativo CPK:** Totalmente compatible con **Composite Primary Keys** de Rails 7.1+.
 * **Gestión de Datos Huérfanos:** Auditoría y auto-reparación de registros que caen en la partición `_default`.
 * **Safety Guards:** Protección estricta contra operaciones destructivas accidentales en entornos de Producción.
@@ -108,8 +108,10 @@ rails g tenant_partition:online_migration versions isp_id
 *Esto creará dos archivos de migración estructurados cronológicamente.*
 
 ### Paso 2: Fase de Preparación y Live Sync (Migración 1)
-Abre la primera migración generada (`..._prepare_online_migration_for_versions.rb`).
-Gracias a la **introspección**, la gema leerá la estructura de tu tabla vieja, la clonará exactamente igual y le instalará Triggers de sincronización en tiempo real.
+Abre la primera migración generada (`..._prepare_online_migration_for_versions.rb`). Tienes dos opciones para definir la nueva tabla particionada:
+
+**Opción A: Clonación Automática (Recomendado)**
+Gracias a la **introspección**, la gema puede clonar la estructura de tu tabla original y configurarle los triggers en un solo paso. Ideal si no quieres modificar el esquema.
 
 ```ruby
 def up
@@ -125,7 +127,25 @@ def up
   end
 end
 ```
-Ejecuta `rails db:migrate`. A partir de este milisegundo, cualquier `INSERT/UPDATE/DELETE` en tu app se replica automáticamente a la tabla particionada.
+
+**Opción B: Refactorización Manual (Opcional)**
+Si deseas aprovechar esta migración para **limpiar tu esquema** (ej. eliminar columnas deprecadas o cambiar tipos de datos), puedes definir la tabla manualmente y luego aplicar los triggers:
+
+```ruby
+def up
+  # Defines la estructura limpia que deseas para el futuro
+  create_partitioned_table :versions_partitioned, partition_key: :isp_id, id_type: :uuid do |t|
+    t.string :item_type, null: false
+    t.string :event, null: false
+    # Omitimos columnas viejas que ya no usamos...
+  end
+
+  # Instalas los triggers de sincronización
+  create_partition_sync_trigger(:versions, :versions_partitioned, :isp_id)
+end
+```
+
+Ejecuta `rails db:migrate`. A partir de este milisegundo, cualquier `INSERT/UPDATE/DELETE` en tu app se replica automáticamente a la tabla particionada (sombra).
 
 ### Paso 3: El Backfill de Datos Históricos
 Con la app corriendo y los datos nuevos sincronizándose solos, copiamos el historial pesado ejecutando la siguiente tarea Rake (idealmente en un entorno de background job o consola de ops):
@@ -139,20 +159,28 @@ Para tablas con **UUIDs** (Paginación segura por fecha):
 ```bash
 rake tenant_partition:backfill_data[PaperTrail::Version,versions_partitioned,created_at]
 ```
-*(El Migrator procesará lotes manejando inteligentemente los conflictos mediante `ON CONFLICT DO UPDATE SET`. La data viva de los triggers siempre prevalecerá sobre la data histórica).*
+
+*(🪄 **Auto-Aprovisionamiento JIT:** El `Migrator` procesará lotes manejando los conflictos inteligentemente mediante `ON CONFLICT DO UPDATE`. Además, analizará los datos en tiempo real y **creará automáticamente las tablas físicas hijas** a medida que descubra nuevos `isp_id`, garantizando que tu infraestructura se despliegue a la perfección sin intervención manual).*
 
 ### Paso 4: El Cutover Atómico (Migración 2)
-El "Cutover" es el momento exacto en el que tu aplicación deja de usar la tabla original y comienza a usar la tabla particionada mediante una transacción atómica de milisegundos.
+El "Cutover" es el momento exacto en el que tu aplicación deja de usar la tabla original y comienza a usar la tabla particionada. Para lograr el **cero downtime**, la gema utiliza una transacción atómica de milisegundos.
 
-**1. Verificación previa:** Comprueba que ambas tablas tengan la misma información (`PaperTrail::Version.count == PaperTrail::Version.from('versions_partitioned').count`).
+**1. Verificación previa:** Comprueba que ambas tablas tengan la misma información en consola:
+```ruby
+PaperTrail::Version.count == PaperTrail::Version.from('versions_partitioned').count
+```
+
 **2. Ejecutar el intercambio:**
 ```bash
 rails db:migrate
 ```
-El helper `swap_partitioned_tables` eliminará los triggers, renombrará tu tabla vieja a `versions_legacy` (como backup) y la nueva a `versions`. 
-**¡Felicidades! Has particionado una tabla masiva sin un solo segundo de downtime.** 🚀
+El helper `swap_partitioned_tables` abrirá una transacción para:
+1. Eliminar los Triggers de Live Sync.
+2. Renombrar la tabla original a `versions_legacy` (backup de seguridad).
+3. Renombrar la tabla particionada a `versions`.
 
-*(Si necesitas revertir, `rails db:rollback` deshará el cambio de nombres y reactivará los triggers instantáneamente).*
+**¡Felicidades! Has particionado una tabla masiva sin un solo segundo de downtime.** 🚀
+*(Si detectas algún problema en producción tras el Cutover, ejecutar `rails db:rollback` deshará el cambio de nombres y reactivará los triggers instantáneamente de forma segura).*
 
 ---
 
@@ -181,7 +209,7 @@ Esto garantiza que el motor de PostgreSQL vaya directamente a la tabla física `
 
 ## 🏗 Orquestación de Tenants
 
-Debes crear la infraestructura física (la tabla hija) para cada Tenant. Esto se suele hacer mediante callbacks cuando se registra un cliente nuevo.
+Debes crear la infraestructura física (la tabla hija) para cada Tenant a medida que nacen nuevos clientes en tu sistema.
 
 ```ruby
 # app/models/isp.rb
@@ -214,7 +242,7 @@ Conversation.partition_table_exists?(123) # => true / false
 
 ## 🧹 Mantenimiento: Datos Huérfanos
 
-Si insertas un registro cuyo Tenant no tiene una tabla hija aprovisionada, PostgreSQL lo enviará de forma segura a la tabla `_default`. La gema provee tareas para mantener tu base de datos saludable:
+Si un registro nuevo o vivo entra al sistema antes de que se aprovisione su tabla hija, PostgreSQL lo enviará de forma segura a la tabla `_default`. La gema provee tareas para mantener tu base de datos saludable:
 
 **1. Auditoría (Encontrar datos perdidos):**
 ```bash
