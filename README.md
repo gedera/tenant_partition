@@ -101,7 +101,7 @@ Si tienes una tabla legacy con millones de registros y necesitas particionarla e
 
 *(⚠️ **Requisito:** La tabla original ya debe tener la columna de tu `partition_key` definida).*
 
-### Fase 1: Preparación y Live Sync (Despliegue 1)
+### Fase 1: Preparación, Código y Live Sync (Despliegue 1)
 Genera la infraestructura inicial ejecutando:
 
 ```bash
@@ -117,7 +117,16 @@ def up
   )
 end
 ```
-**👉 Ejecuta `rails db:migrate` y despliega a producción.** A partir de este milisegundo, la base de datos enviará todo dato "vivo" nuevo a tu nueva tabla sombra, sin afectar a tus usuarios.
+
+**Activa la gema en tu modelo:** Agrega la macro a tu clase ActiveRecord.
+```ruby
+class Version < ApplicationRecord
+  partition_table 
+end
+```
+*(🪄 **Safe Deploy:** Gracias a la Introspección Dinámica, la gema sabe que la base de datos aún no ha finalizado la migración. El modelo seguirá comportándose como una tabla normal sin romper tu aplicación).*
+
+**👉 Ejecuta `rails db:migrate` y despliega a producción.** A partir de este milisegundo, la base de datos enviará todo dato "vivo" nuevo a tu nueva tabla sombra, y tu código estará listo para el futuro.
 
 ### Fase 2: Backfill Histórico (Fase Manual)
 Con la app corriendo, copia el historial pesado ejecutando esta tarea (idealmente en un entorno de background job o consola de ops):
@@ -139,17 +148,8 @@ Una vez que el Backfill termine al 100%, genera la migración de intercambio fin
 rails g tenant_partition:cutover versions isp_id
 ```
 
-**👉 Ejecuta `rails db:migrate` y despliega a producción.** Una transacción atómica cruzará los nombres de las tablas y eliminará los triggers en 1 milisegundo, logrando un **cero downtime** real.
-
-### Fase 4: Activación del Código
-Con la base de datos lista, enciende los superpoderes en tu modelo:
-
-```ruby
-class Version < ApplicationRecord
-  partition_table 
-end
-```
-*(🪄 **Seguridad Introspectiva:** La macro `partition_table` consulta a PostgreSQL. Si la tabla no ha terminado su Cutover, se comporta como una tabla normal. Si el Cutover finalizó, activa la Primary Key Compuesta. ¡Es 100% seguro hacer deploy de este código antes de que termine la Fase 3!)*
+**👉 Ejecuta `rails db:migrate` y despliega a producción.** Una transacción atómica cruzará los nombres de las tablas y eliminará los triggers en 1 milisegundo. 
+En el instante en que los servidores se reinicien tras el deploy, tu modelo (`Version`) consultará a PostgreSQL, detectará que la tabla ahora sí es particionada, y activará automáticamente sus superpoderes (Composite Primary Keys y Partition Pruning). **¡Cero downtime logrado!**
 
 ---
 
