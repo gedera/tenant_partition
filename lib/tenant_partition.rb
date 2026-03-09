@@ -102,16 +102,29 @@ module TenantPartition
     end
 
     # @api private
-    def log_info(tag, msg)  = logger&.info(format_log(tag, msg))
+    def log_info(tag, msg)
+      logger&.info(format_log(tag, msg))
+    end
+
     # @api private
-    def log_warn(tag, msg)  = logger&.warn(format_log(tag, msg))
+    def log_warn(tag, msg)
+      logger&.warn(format_log(tag, msg))
+    end
+
     # @api private
-    def log_error(tag, msg) = logger&.error(format_log(tag, msg))
+    def log_error(tag, msg)
+      logger&.error(format_log(tag, msg))
+    end
 
     private
 
-    def format_log(tag, msg) = "[TenantPartition] [#{tag}] #{msg}"
-    def logger = (defined?(Rails) ? Rails.logger : Logger.new($stdout))
+    def format_log(tag, msg)
+      "[TenantPartition] [#{tag}] #{msg}"
+    end
+
+    def logger
+      defined?(Rails) ? Rails.logger : Logger.new($stdout)
+    end
 
     def ensure_models_loaded!
       return unless defined?(Rails) && !Rails.configuration.eager_load

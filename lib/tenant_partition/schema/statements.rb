@@ -1,3 +1,4 @@
+
 # frozen_string_literal: true
 
 module TenantPartition
@@ -18,11 +19,19 @@ module TenantPartition
 
         raise TenantPartition::Error, "Falta 'partition_key'." unless key
 
-        configure_pk_and_options(options, key)
+        options[:id] = false
+        options.delete(:primary_key) # Removido para evadir el parseo roto de Rails 6
+        options[:options] = "PARTITION BY LIST (#{key})"
 
         create_table(table_name, **options) do |t|
           setup_partitioning(t, key, id_type, block)
         end
+
+        # 🪄 MAGIA PARA RAILS 6: Forzamos la Primary Key Compuesta a nivel de PostgreSQL
+        execute "ALTER TABLE #{table_name} ADD PRIMARY KEY (id, #{key});"
+
+        # Agregamos un índice único explícito para que el insert_all de Rails lo detecte sin quejarse
+        add_index table_name, [:id, key], unique: true
 
         create_default_partition(table_name)
       end
@@ -42,8 +51,10 @@ module TenantPartition
 
           # 2. Introspección: Leemos las columnas de la tabla vieja
           ActiveRecord::Base.connection.columns(source_table).each do |col|
-            # Omitimos 'id' y 'partition_key' porque el helper ya los define correctamente
-            next if col.name == "id" || col.name == key.to_s
+            # 🪄 CAMBIO CLAVE: Ya NO omitimos la partition_key.
+            # Solo omitimos el 'id', para que la partition_key se copie con
+            # su tipo original exacto (UUID o Integer) desde la tabla legacy.
+            next if col.name == "id"
 
             # Recreamos la columna con sus propiedades exactas
             t.column col.name, col.type,

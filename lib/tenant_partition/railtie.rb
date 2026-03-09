@@ -32,7 +32,7 @@ module TenantPartition
         # Validación de seguridad:
         # Solo inyectamos el módulo si el adaptador configurado es efectivamente PostgreSQL.
         # Esto previene errores si la gema se instala en proyectos con MySQL o SQLite.
-        if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter) && connection_db_config.adapter == "postgresql"
+        if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter)
           ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.include TenantPartition::Schema::Statements
         end
       end

@@ -13,7 +13,6 @@ module TenantPartition
         check_configuration!
         return unless defined?(Rails) && Rails.env.to_s != "test"
 
-        check_database_adapter!
         check_postgres_version!
       end
 
@@ -23,14 +22,6 @@ module TenantPartition
         return unless TenantPartition.configuration.partition_key.nil?
 
         raise TenantPartition::Error, "Falta configuración: 'partition_key' no ha sido definido."
-      end
-
-      def check_database_adapter!
-        adapter = ActiveRecord::Base.connection_db_config.adapter
-        return if adapter == "postgresql"
-
-        raise TenantPartition::Error, "Adaptador incompatible: TenantPartition solo soporta " \
-                                      "PostgreSQL (usando: #{adapter})."
       end
 
       def check_postgres_version!
