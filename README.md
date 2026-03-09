@@ -1,23 +1,25 @@
-# TenantPartition
+# TenantPartition 🏢
 
-**TenantPartition** es una solución robusta y "Rails-native" para implementar **Particionamiento Declarativo (List Partitioning)** de PostgreSQL en aplicaciones Ruby on Rails.
+**TenantPartition** es un framework de infraestructura "Rails-native" diseñado para implementar **Particionamiento Declarativo (List Partitioning)** de PostgreSQL en aplicaciones Ruby on Rails (7.1+).
 
-A diferencia de otras soluciones que dependen de esquemas (schemas) o hackeos a la conexión de base de datos, `tenant_partition` utiliza características nativas de PostgreSQL para dividir tablas gigantes en tablas físicas más pequeñas por tenant (Cliente, ISP, Organización, etc.), manteniendo la experiencia de desarrollo de ActiveRecord estándar.
+A diferencia de otras soluciones multi-tenant que dependen de múltiples esquemas (schemas) o hackeos a nivel de consultas (row-level filtering), `tenant_partition` utiliza características nativas del motor de PostgreSQL para dividir físicamente tablas gigantes en tablas más pequeñas y ultrarrápidas por tenant (Cliente, ISP, Organización, etc.). Todo esto, manteniendo intacta la experiencia de desarrollo estándar de ActiveRecord.
 
 ## 🚀 Características Principales
 
-* **API Simple (Opt-in):** Usa `partition_table` en tus modelos para activar la magia.
-* **Migraciones Inteligentes:** Helper `create_partitioned_table` que maneja la complejidad de Postgres automáticamente (Soporte para UUID y BigInt).
-* **Zero-Downtime Migrations:** Herramientas completas (Triggers, Backfill background jobs y Generadores) para migrar tablas en producción con millones de registros sin detener el servicio.
-* **Soporte Nativo CPK:** Compatible con **Composite Primary Keys** de Rails 7.1+.
-* **Gestión de Datos Huérfanos:** Herramientas para auditar y mover datos no asignados desde la tabla `_default`.
-* **Safety Guards:** Protección contra operaciones destructivas accidentales en Producción.
+* **API Simple y Opt-in:** Activa el particionamiento en tus modelos simplemente agregando la macro `partition_table`.
+* **Zero-Downtime Migrations:** Herramientas de nivel empresarial para migrar tablas masivas en producción sin detener el servicio.
+* **Introspección de Esquemas:** Clonación dinámica de tablas legacy (`create_partitioned_table_from`) sin necesidad de escribir las columnas a mano.
+* **Sincronización en Tiempo Real (Live Sync):** Triggers de base de datos automatizados con resolución de conflictos (`UPSERT`) integrada.
+* **Backfill Engine:** Motor de copiado de datos en segundo plano optimizado en memoria, con soporte de paginación por tuplas para UUIDs y BigInts.
+* **Soporte Nativo CPK:** Totalmente compatible con **Composite Primary Keys** de Rails 7.1+.
+* **Gestión de Datos Huérfanos:** Auditoría y auto-reparación de registros que caen en la partición `_default`.
+* **Safety Guards:** Protección estricta contra operaciones destructivas accidentales en entornos de Producción.
 
 ---
 
 ## 📦 Instalación
 
-Agrega esto a tu `Gemfile`:
+Agrega la gema a tu `Gemfile`:
 
 ```ruby
 gem 'tenant_partition'
@@ -29,30 +31,30 @@ Y ejecuta:
 bundle install
 ```
 
+Requisitos mínimos: **Ruby 3.2+**, **Rails 7.1+** y **PostgreSQL 13+** (Optimizado para PG 17).
+
 ---
 
 ## ⚙️ Configuración Inicial
 
-### 1. Inicializador
-Crea un archivo para definir tu clave de partición global (por ejemplo, `:isp_id`, `:account_id`, `:tenant_id`).
+Crea un archivo de inicialización para definir tu clave de partición global (por ejemplo, `:isp_id`, `:account_id` o `:tenant_id`).
 
 ```ruby
 # config/initializers/tenant_partition.rb
-
 TenantPartition.configure do |config|
-  # Esta es la columna que actuará como discriminador global
+  # Columna que actuará como discriminador principal en toda la base de datos
   config.partition_key = :isp_id
 end
 ```
 
-### 2. Habilitar en ApplicationRecord
-Incluye el concern en tu modelo base. Esto solo habilita el DSL, no particiona nada por defecto.
+Habilita el DSL de la gema en tu modelo base de ActiveRecord:
 
 ```ruby
 # app/models/application_record.rb
 class ApplicationRecord < ActiveRecord::Base
   primary_abstract_class
 
+  # Esto solo inyecta el DSL, no particiona ningún modelo por defecto.
   include TenantPartition::Concerns::Partitioned
 end
 ```
@@ -61,47 +63,31 @@ end
 
 ## 🛠 Guía 1: Creando Nuevas Tablas Particionadas
 
-Si vas a crear una tabla desde cero, el proceso es muy directo.
+Si estás desarrollando un feature desde cero, crear una tabla particionada es sumamente sencillo.
 
-### Paso 1: Migración
-
-Usa el helper `create_partitioned_table` que configurará automáticamente la Primary Key compuesta, la partición LIST y la tabla `_default`.
+### 1. La Migración
+Usa el helper `create_partitioned_table`. Este configura automáticamente la Primary Key Compuesta, la partición tipo `LIST` y la tabla `_default`.
 
 ```ruby
 class CreateConversations < ActiveRecord::Migration[7.1]
   def change
-    # id_type: :bigint (por defecto) o :uuid
-    create_partitioned_table :conversations do |t|
+    # Soporta id_type: :bigint (por defecto) o :uuid
+    create_partitioned_table :conversations, id_type: :uuid do |t|
       t.string :subject
       t.text :body
       t.timestamps
       
-      # Nota: No definas :id ni la :partition_key explícitamente, la gema lo hace por ti.
+      # 🪄 Nota: NO definas explícitamente el :id ni el :isp_id aquí. 
+      # La gema lo hace por ti automáticamente.
     end
   end
 end
 ```
 
-### Paso 2: El Modelo
-
+### 2. El Modelo
 ```ruby
 class Conversation < ApplicationRecord
   partition_table 
-end
-```
-
-### Paso 3: Aprovisionar Tenants
-
-Crea las particiones físicas cuando se registra un nuevo cliente en tu sistema:
-
-```ruby
-class Isp < ApplicationRecord
-  after_create :provision_infrastructure
-
-  def provision_infrastructure
-    # Crea las particiones en todos los modelos registrados
-    TenantPartition.create!(self.id)
-  end
 end
 ```
 
@@ -109,107 +95,147 @@ end
 
 ## 🔥 Guía 2: Migrar una Tabla Existente (Zero-Downtime Migration)
 
-Si tienes una tabla enorme en producción (ej. `versions` de PaperTrail) y quieres particionarla sin tirar la base de datos, `TenantPartition` incluye un generador que automatiza el patrón "Rename, Recreate & Backfill".
+Si tienes una tabla con millones de registros (ej. `versions` de PaperTrail) y necesitas particionarla en producción sin causar tiempo de inactividad, utiliza nuestra suite de migraciones en línea.
 
-**Requisito previo:** La tabla actual *debe* tener la columna de partición (ej. `isp_id`). Si no la tiene, agrégala en una migración estándar antes de continuar.
+*(⚠️ **Requisito:** La tabla original ya debe tener la columna de tu `partition_key` definida, aunque algunos registros la tengan en `null`)*.
 
-### Paso 1: Generar la infraestructura de migración
-
-Ejecuta el generador indicando la tabla original y tu partition key:
+### Paso 1: Generar la infraestructura
+Ejecuta el generador indicando la tabla a migrar y la clave de partición:
 
 ```bash
 rails g tenant_partition:online_migration versions isp_id
 ```
+*Esto creará dos archivos de migración estructurados cronológicamente.*
 
-Esto generará dos archivos de migración y te mostrará las instrucciones.
-
-### Paso 2: Fase de Preparación (Migración 1)
-
+### Paso 2: Fase de Preparación y Live Sync (Migración 1)
 Abre la primera migración generada (`..._prepare_online_migration_for_versions.rb`).
-Debes copiar la definición de tus columnas actuales dentro del bloque `create_partitioned_table`.
+Gracias a la **introspección**, la gema leerá la estructura de tu tabla vieja, la clonará exactamente igual y le instalará Triggers de sincronización en tiempo real.
 
 ```ruby
 def up
-  # 1. Crea la nueva tabla "sombra"
-  create_partitioned_table :versions_partitioned, partition_key: :isp_id, id_type: :uuid do |t|
-    t.string :item_type, null: false
-    t.string :event, null: false
-    # ... pega el resto de tus columnas exactas aquí ...
+  # 🪄 Magia de TenantPartition: Clona el esquema y sincroniza eventos automáticamente.
+  create_partitioned_table_from(
+    :versions_partitioned, # Tabla destino (sombra)
+    :versions,             # Tabla origen (legacy)
+    partition_key: :isp_id,
+    sync_triggers: true
+    # id_type: :uuid       # Descomentar si tu tabla usa UUIDs
+  ) do |t|
+    # (Opcional) Agrega nuevos índices a la tabla particionada aquí
   end
-
-  # 2. Crea los triggers que mantendrán la data sincronizada en tiempo real (Live Sync)
-  create_partition_sync_trigger(:versions, :versions_partitioned, :isp_id)
 end
 ```
-Ejecuta: `rails db:migrate`. Desde este momento, todos los datos nuevos (INSERT/UPDATE/DELETE) se replican automáticamente a la nueva tabla.
+Ejecuta `rails db:migrate`. A partir de este milisegundo, cualquier `INSERT/UPDATE/DELETE` en tu app se replica automáticamente a la tabla particionada.
 
 ### Paso 3: El Backfill de Datos Históricos
+Con la app corriendo y los datos nuevos sincronizándose solos, copiamos el historial pesado ejecutando la siguiente tarea Rake (idealmente en un entorno de background job o consola de ops):
 
-Con tu aplicación corriendo normalmente, usa la Rake Task para copiar los millones de registros antiguos hacia la tabla particionada de forma silenciosa y por lotes.
-
-Si tus IDs son **Enteros Autoincrementables**:
+Para tablas con **IDs Enteros**:
 ```bash
-rake tenant_partition:backfill_data[PaperTrail::Version,versions_partitioned]
+rake tenant_partition:backfill_data[PaperTrail::Version,versions_partitioned,id]
 ```
 
-Si tus IDs son **UUIDs** (Debes decirle que pagine por `created_at`):
+Para tablas con **UUIDs** (Paginación segura por fecha):
 ```bash
 rake tenant_partition:backfill_data[PaperTrail::Version,versions_partitioned,created_at]
 ```
-
-*(La gema maneja automáticamente los conflictos mediante `UPSERT`, asegurando que el backfill nunca sobrescriba un registro que el Trigger ya haya actualizado en vivo).*
+*(El Migrator procesará lotes manejando inteligentemente los conflictos mediante `ON CONFLICT DO UPDATE SET`. La data viva de los triggers siempre prevalecerá sobre la data histórica).*
 
 ### Paso 4: El Cutover Atómico (Migración 2)
-
-Cuando el backfill finalice y ambas tablas pesen lo mismo, ejecuta la segunda migración (`..._complete_online_migration_for_versions.rb`):
+Una vez que el Backfill termine (ambas tablas tienen la misma cantidad de registros), ejecuta la segunda migración:
 
 ```bash
 rails db:migrate
 ```
-Esta migración usa `swap_partitioned_tables` para, en una transacción de milisegundos, borrar los triggers, renombrar tu tabla vieja a `versions_legacy` y la tabla particionada a `versions`. **¡Migración completada con cero downtime!**
+El helper `swap_partitioned_tables` abrirá una transacción ultrarrápida (milisegundos) para:
+1. Eliminar los Triggers.
+2. Renombrar la tabla vieja a `versions_legacy`.
+3. Renombrar la tabla nueva a `versions`.
+
+**¡Felicidades! Has particionado una tabla masiva sin un solo segundo de downtime.** 🚀
 
 ---
 
-## 🧹 Mantenimiento (Datos Huérfanos)
+## 🏗 Orquestación de Tenants
 
-Si insertas un registro cuyo tenant no tiene una tabla hija creada, PostgreSQL lo guardará en la tabla `_default`. La gema incluye utilidades para auditar y limpiar esto.
+Debes crear la infraestructura física (la tabla hija) para cada Tenant. Esto se suele hacer mediante callbacks cuando se registra un cliente nuevo.
 
-**Auditar:**
+```ruby
+# app/models/isp.rb
+class Isp < ApplicationRecord
+  after_create :provision_infrastructure
+  after_destroy :destroy_infrastructure
+
+  private
+
+  def provision_infrastructure
+    # Crea las particiones en TODOS los modelos que tengan `partition_table`
+    TenantPartition.create!(self.id)
+  end
+
+  def destroy_infrastructure
+    # Destruye las particiones y sus datos (Protegido por SafetyGuard en Producción)
+    TenantPartition.destroy!(self.id)
+  end
+end
+```
+
+**Comandos manuales por modelo:**
+```ruby
+Conversation.create_partition(123)        # Crea 'conversations_isp_123'
+Conversation.drop_partition(123)          # Elimina 'conversations_isp_123'
+Conversation.partition_table_exists?(123) # => true / false
+```
+
+---
+
+## 🧹 Mantenimiento: Datos Huérfanos
+
+Si insertas un registro cuyo Tenant no tiene una tabla hija aprovisionada, PostgreSQL lo enviará de forma segura a la tabla `_default`. La gema provee tareas para mantener tu base de datos saludable:
+
+**1. Auditoría (Encontrar datos perdidos):**
 ```bash
 rake tenant_partition:audit
-# [ALERTA] Conversation: 450 registros huérfanos encontrados.
+# [TenantPartition] [AUDIT] Iniciando auditoría...
+# [TenantPartition] [ALERTA] Conversation: 450 registros huérfanos encontrados.
 ```
 
-**Limpiar:** Crea las particiones faltantes y mueve los datos automáticamente a su lugar correcto.
+**2. Limpieza (Mover a su lugar correcto):**
+*(Asegúrate de haber aprovisionado el tenant primero con `TenantPartition.create!(id)`)*
 ```bash
 rake tenant_partition:cleanup
-# [FIX] Conversation: Procesando 2 tenants...
-# [MOVE] -> ID 101: 450 registros recuperados.
+# [TenantPartition] [FIX] Conversation: Procesando 2 tenants...
+# [TenantPartition] [MOVE] -> ID 101: 450 registros recuperados.
 ```
 
 ---
 
-## 📖 Referencia de API Rápida
+## 📖 Referencia de la API
 
-### `TenantPartition` (Módulo Global)
-* `configure { ... }`
-* `create!(tenant_id)`: Crea la infraestructura física para el tenant en todos los modelos.
-* `destroy!(tenant_id)`: Borra (DROP) las tablas de ese tenant.
-* `exists?(tenant_id)`: Retorna boolean.
+### Módulo Global `TenantPartition`
+* `.configure { |c| ... }`: Inicialización.
+* `.create!(id)`: Aprovisionamiento global de un tenant.
+* `.destroy!(id)`: Eliminación global de un tenant.
+* `.exists?(id)`: Verifica infraestructura global.
 
-### Macro en Modelos (`partition_table`)
-* `Conversation.create_partition(123)`
-* `Conversation.drop_partition(123)`
-* `Conversation.partition_table_exists?(123)`
+### Macros de Modelo
+* `partition_table(key: nil)`: Activa particionamiento (opcionalmente sobreescribe la clave global).
 
 ### Helpers de Migraciones
-* `create_partitioned_table(name, partition_key: :id, id_type: :bigint, &block)`
-* `create_partition_sync_trigger(source, target, key)`
+* `create_partitioned_table(table_name, **options)`
+* `create_partitioned_table_from(target, source, sync_triggers: false, **options)`
+* `create_partition_sync_trigger(source, target, partition_key)`
 * `remove_partition_sync_trigger(source, target)`
-* `swap_partitioned_tables(legacy_name, partitioned_name)`
+* `swap_partitioned_tables(legacy_table, partitioned_table)`
+
+---
+
+## 🛡 Consideraciones de Producción
+
+En entornos productivos (`Rails.env.production?`), la gema activa un `SafetyGuard` que impide ejecutar borrados accidentales de particiones. Si legítimamente necesitas eliminar la infraestructura de un tenant, debes pasar un bypass explícito en las variables de entorno si lo ejecutas vía Rake, o manejar el riesgo explícitamente en tu código.
 
 ---
 
 ## Licencia
 
-The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+Esta gema está disponible como código abierto bajo los términos de la [MIT License](https://opensource.org/licenses/MIT).
