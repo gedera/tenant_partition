@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require_relative "data_mover"
 
 module TenantPartition
@@ -101,15 +102,20 @@ module TenantPartition
         end
 
         # Genera el nombre de la tabla física para una partición específica.
+        # Utiliza Hashing Inteligente para evitar el límite de 63 caracteres de PostgreSQL.
         #
         # @param value [Object] El valor del tenant.
-        # @return [String] Nombre de la tabla (ej: 'conversations_isp_1').
+        # @return [String] Nombre de la tabla (ej: 'conversations_isp_1' o 'conversations_isp_a1b2c3d4').
         def partition_table_name(value)
-          sanitized_value = value.to_s.gsub("-", "_")
+          str_value = value.to_s
+
+          # Si es largo (UUID), hasheamos a 8 caracteres. Si es corto (Integer), lo dejamos legible.
+          safe_value = str_value.length > 10 ? Digest::MD5.hexdigest(str_value)[0..7] : str_value.gsub("-", "_")
+
           suffix = partition_key_column.to_s.gsub("_id", "")
 
-          # Formato estricto interno: nombre_tabla_sufijo_valor
-          "#{table_name}_#{suffix}_#{sanitized_value}"
+          # Formato estricto interno: nombre_tabla_sufijo_valor_seguro
+          "#{table_name}_#{suffix}_#{safe_value}"
         end
 
         # Verifica si la tabla de la partición existe en el catálogo de PostgreSQL.

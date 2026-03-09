@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require "set"
 
 module TenantPartition
@@ -112,9 +113,12 @@ module TenantPartition
 
     def create_shadow_partition(pid)
       suffix = @partition_key.to_s.gsub("_id", "")
-      sanitized_pid = pid.to_s.gsub("-", "_")
+      str_pid = pid.to_s
 
-      partition_name = "#{@target_table}_#{suffix}_#{sanitized_pid}"
+      # Misma lógica de Hashing Inteligente para la creación de infraestructura
+      safe_pid = str_pid.length > 10 ? Digest::MD5.hexdigest(str_pid)[0..7] : str_pid.gsub("-", "_")
+
+      partition_name = "#{@target_table}_#{suffix}_#{safe_pid}"
 
       sql = <<~SQL.squish
         CREATE TABLE IF NOT EXISTS #{partition_name}
