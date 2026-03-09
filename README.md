@@ -143,7 +143,7 @@ rake tenant_partition:backfill_data[PaperTrail::Version,versions_partitioned,cre
 
 ### Paso 4: El Cutover Atómico (Migración 2)
 
-El "Cutover" es el momento exacto en el que tu aplicación deja de usar la tabla original y comienza a usar la tabla particionada. 
+El "Cutover" es el momento exacto en el que tu aplicación deja de usar la tabla original y comienza a usar la tabla particionada.
 
 Para lograr el **cero downtime**, la gema utiliza una transacción atómica de PostgreSQL. Esto significa que el intercambio de tablas ocurre en una fracción de milisegundo y bloquea la base de datos de forma imperceptible, por lo que tus usuarios no experimentarán caídas ni errores de conexión.
 
@@ -166,7 +166,7 @@ rails db:migrate
 El helper `swap_partitioned_tables` abre una transacción y ejecuta tres acciones indivisibles:
 1. **Elimina los Triggers:** Detiene la sincronización en tiempo real desde la tabla original.
 2. **Resguarda la tabla legacy:** Renombra tu tabla original (ej. `versions`) a `versions_legacy`. Este será tu backup de seguridad inmediato.
-3. **Activa la particionada:** Renombra la tabla sombra (ej. `versions_partitioned`) a `versions`. 
+3. **Activa la particionada:** Renombra la tabla sombra (ej. `versions_partitioned`) a `versions`.
 
 A partir de ese milisegundo, tu aplicación interactúa nativamente con la estructura particionada.
 
