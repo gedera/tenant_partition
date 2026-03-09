@@ -38,7 +38,9 @@ module TenantPartition
       def create_partition_sync_trigger(source_table, target_table, partition_key)
         func_name = "trigger_sync_#{source_table}_to_#{target_table}"
         trigger_name = "sync_#{source_table}_data"
-        columns = column_names_for(source_table)
+
+        # Mapeo seguro: "col1 = EXCLUDED.col1, col2 = EXCLUDED.col2"
+        update_mapping = update_mapping_for(source_table)
 
         execute <<~SQL.squish
           CREATE OR REPLACE FUNCTION #{func_name}() RETURNS TRIGGER AS $$
@@ -49,12 +51,12 @@ module TenantPartition
             ELSIF (TG_OP = 'UPDATE') THEN
               INSERT INTO #{target_table} VALUES (NEW.*)
               ON CONFLICT (id, #{partition_key})
-              DO UPDATE SET (#{columns}) = (ROW(NEW.*));
+              DO UPDATE SET #{update_mapping};
               RETURN NEW;
             ELSIF (TG_OP = 'INSERT') THEN
               INSERT INTO #{target_table} VALUES (NEW.*)
               ON CONFLICT (id, #{partition_key})
-              DO UPDATE SET (#{columns}) = (ROW(NEW.*));
+              DO UPDATE SET #{update_mapping};
               RETURN NEW;
             END IF;
             RETURN NULL;
@@ -142,13 +144,12 @@ module TenantPartition
         SQL
       end
 
-      # Obtiene los nombres de las columnas de una tabla separados por comas.
-      # Útil para armar sentencias UPDATE masivas.
-      #
-      # @param table_name [Symbol, String] Nombre de la tabla.
-      # @return [String]
-      def column_names_for(table_name)
-        ActiveRecord::Base.connection.columns(table_name).map(&:name).join(", ")
+      # Genera el mapeo explícito de columnas para el UPSERT.
+      # Utiliza EXCLUDED, que es la pseudo-tabla de Postgres que contiene la fila conflictiva.
+      def update_mapping_for(table_name)
+        ActiveRecord::Base.connection.columns(table_name).map do |col|
+          "#{col.name} = EXCLUDED.#{col.name}"
+        end.join(", ")
       end
     end
   end
