@@ -1,0 +1,16 @@
+===============================================================================
+🪄 ¡Migración Online Preparada!
+
+Se han generado 2 archivos de migración. El flujo de trabajo seguro es este:
+
+1. EDITA el archivo de migración `prepare_online_migration...` y copia la
+   definición de las columnas de tu tabla original.
+2. EJECUTA la primera migración en producción:
+   `rails db:migrate VERSION=xxx_prepare_online_migration...`
+3. LANZA el Backfill masivo en un background job o consola de producción:
+   `rake tenant_partition:backfill_data[MiModelo,mi_tabla_partitioned]`
+4. CUANDO TERMINE el backfill, ejecuta la migración final de Cutover:
+   `rails db:migrate VERSION=yyy_complete_online_migration...`
+
+¡Cero Downtime logrado! 🚀
+===============================================================================

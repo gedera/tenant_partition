@@ -8,6 +8,7 @@ require_relative "tenant_partition/version"
 require_relative "tenant_partition/configuration"
 require_relative "tenant_partition/safety_guard"
 require_relative "tenant_partition/maintenance"
+require_relative "tenant_partition/migrator"
 require_relative "tenant_partition/concerns/partitioned"
 require_relative "tenant_partition/concerns/controller"
 

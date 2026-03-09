@@ -1,0 +1,21 @@
+class CompleteOnlineMigrationFor<%= table_name.camelize %> < ActiveRecord::Migration<%= migration_version %>
+  def up
+    # 3. Intercambio Atómico (Cutover)
+    swap_partitioned_tables(:<%= table_name %>, :<%= target_table %>)
+
+    # La tabla original quedó renombrada como '<%= table_name %>_legacy' como backup.
+    # Cuando estés seguro de que todo funciona, puedes crear otra migración para borrarla.
+  end
+
+  def down
+    # Revierte el swap de nombres
+    swap_partitioned_tables(:<%= target_table %>, :<%= table_name %>)
+
+    # Restaura los triggers por si hay que volver atrás
+    create_partition_sync_trigger(
+      :<%= table_name %>,
+      :<%= target_table %>,
+      :<%= partition_key %>
+    )
+  end
+end

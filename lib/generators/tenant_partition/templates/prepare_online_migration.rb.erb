@@ -1,0 +1,23 @@
+class PrepareOnlineMigrationFor<%= table_name.camelize %> < ActiveRecord::Migration<%= migration_version %>
+  def up
+    # 1. Creamos la tabla sombra particionada
+    # TODO: DEBES COPIAR AQUÍ la definición exacta de las columnas de tu tabla actual '<%= table_name %>'.
+    create_partitioned_table :<%= target_table %>, partition_key: :<%= partition_key %> do |t|
+      # t.string :name
+      # t.timestamps
+      # t.integer :<%= partition_key %>, null: false
+    end
+
+    # 2. Instalamos los triggers de replicación en vivo
+    create_partition_sync_trigger(
+      :<%= table_name %>,
+      :<%= target_table %>,
+      :<%= partition_key %>
+    )
+  end
+
+  def down
+    remove_partition_sync_trigger(:<%= table_name %>, :<%= target_table %>)
+    drop_partitioned_table(:<%= target_table %>)
+  end
+end
