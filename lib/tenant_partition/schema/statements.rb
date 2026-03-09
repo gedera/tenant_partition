@@ -27,6 +27,41 @@ module TenantPartition
         create_default_partition(table_name)
       end
 
+      # Crea una tabla particionada copiando dinámicamente la estructura de una tabla existente.
+      #
+      # @param target_table [Symbol, String] Nombre de la nueva tabla particionada.
+      # @param source_table [Symbol, String] Nombre de la tabla legacy a copiar.
+      # @param sync_triggers [Boolean] Si es true, instala los triggers de Live Sync automáticamente.
+      # @param options [Hash] Opciones adicionales (ej: partition_key, id_type).
+      def create_partitioned_table_from(target_table, source_table, sync_triggers: false, **options, &block)
+        key = options[:partition_key] || TenantPartition.configuration&.partition_key
+        raise TenantPartition::Error, "Falta 'partition_key'." unless key
+
+        # 1. Creamos la tabla usando nuestro helper core
+        create_partitioned_table(target_table, **options) do |t|
+
+          # 2. Introspección: Leemos las columnas de la tabla vieja
+          ActiveRecord::Base.connection.columns(source_table).each do |col|
+            # Omitimos 'id' y 'partition_key' porque el helper ya los define correctamente
+            next if col.name == "id" || col.name == key.to_s
+
+            # Recreamos la columna con sus propiedades exactas
+            t.column col.name, col.type,
+                     limit: col.limit,
+                     precision: col.precision,
+                     scale: col.scale,
+                     default: col.default,
+                     null: col.null
+          end
+
+          # Permitimos al usuario pasar un bloque opcional para agregar índices
+          block.call(t) if block
+        end
+
+        # 3. Opcional: Instalamos los Triggers en un solo paso
+        create_partition_sync_trigger(source_table, target_table, key) if sync_triggers
+      end
+
       # Crea un trigger de sincronización en tiempo real (Live Sync) mediante UPSERT.
       # Replica de forma atómica los eventos INSERT, UPDATE y DELETE desde una tabla
       # origen (legacy) hacia una tabla destino (particionada sombra).
