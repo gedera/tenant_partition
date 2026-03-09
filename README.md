@@ -142,17 +142,36 @@ rake tenant_partition:backfill_data[PaperTrail::Version,versions_partitioned,cre
 *(El Migrator procesará lotes manejando inteligentemente los conflictos mediante `ON CONFLICT DO UPDATE SET`. La data viva de los triggers siempre prevalecerá sobre la data histórica).*
 
 ### Paso 4: El Cutover Atómico (Migración 2)
-Una vez que el Backfill termine (ambas tablas tienen la misma cantidad de registros), ejecuta la segunda migración:
+
+El "Cutover" es el momento exacto en el que tu aplicación deja de usar la tabla original y comienza a usar la tabla particionada. 
+
+Para lograr el **cero downtime**, la gema utiliza una transacción atómica de PostgreSQL. Esto significa que el intercambio de tablas ocurre en una fracción de milisegundo y bloquea la base de datos de forma imperceptible, por lo que tus usuarios no experimentarán caídas ni errores de conexión.
+
+**1. Verificación previa (Obligatorio)**
+Antes de ejecutar el cambio, debes confirmar que el job de Backfill (Paso 3) finalizó y que ambas tablas tienen exactamente la misma información. Puedes comprobarlo rápidamente en la consola de Rails:
+
+```ruby
+# La cantidad de registros debería ser idéntica
+PaperTrail::Version.count == PaperTrail::Version.from('versions_partitioned').count
+```
+
+**2. Ejecutar el intercambio**
+Una vez confirmada la igualdad de datos, simplemente ejecuta la segunda migración generada:
 
 ```bash
 rails db:migrate
 ```
-El helper `swap_partitioned_tables` abrirá una transacción ultrarrápida (milisegundos) para:
-1. Eliminar los Triggers.
-2. Renombrar la tabla vieja a `versions_legacy`.
-3. Renombrar la tabla nueva a `versions`.
 
-**¡Felicidades! Has particionado una tabla masiva sin un solo segundo de downtime.** 🚀
+**¿Qué ocurre internamente en la base de datos?**
+El helper `swap_partitioned_tables` abre una transacción y ejecuta tres acciones indivisibles:
+1. **Elimina los Triggers:** Detiene la sincronización en tiempo real desde la tabla original.
+2. **Resguarda la tabla legacy:** Renombra tu tabla original (ej. `versions`) a `versions_legacy`. Este será tu backup de seguridad inmediato.
+3. **Activa la particionada:** Renombra la tabla sombra (ej. `versions_partitioned`) a `versions`. 
+
+A partir de ese milisegundo, tu aplicación interactúa nativamente con la estructura particionada.
+
+**Plan de Reversión (Rollback Seguro)**
+Si detectas algún comportamiento anómalo en tu aplicación tras el Cutover, la marcha atrás es segura e instantánea. Al ejecutar `rails db:rollback`, la gema volverá a cruzar los nombres de las tablas a su estado original y reactivará los Triggers de Live Sync automáticamente.
 
 ---
 
