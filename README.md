@@ -142,36 +142,40 @@ rake tenant_partition:backfill_data[PaperTrail::Version,versions_partitioned,cre
 *(El Migrator procesará lotes manejando inteligentemente los conflictos mediante `ON CONFLICT DO UPDATE SET`. La data viva de los triggers siempre prevalecerá sobre la data histórica).*
 
 ### Paso 4: El Cutover Atómico (Migración 2)
+El "Cutover" es el momento exacto en el que tu aplicación deja de usar la tabla original y comienza a usar la tabla particionada mediante una transacción atómica de milisegundos.
 
-El "Cutover" es el momento exacto en el que tu aplicación deja de usar la tabla original y comienza a usar la tabla particionada.
-
-Para lograr el **cero downtime**, la gema utiliza una transacción atómica de PostgreSQL. Esto significa que el intercambio de tablas ocurre en una fracción de milisegundo y bloquea la base de datos de forma imperceptible, por lo que tus usuarios no experimentarán caídas ni errores de conexión.
-
-**1. Verificación previa (Obligatorio)**
-Antes de ejecutar el cambio, debes confirmar que el job de Backfill (Paso 3) finalizó y que ambas tablas tienen exactamente la misma información. Puedes comprobarlo rápidamente en la consola de Rails:
-
-```ruby
-# La cantidad de registros debería ser idéntica
-PaperTrail::Version.count == PaperTrail::Version.from('versions_partitioned').count
-```
-
-**2. Ejecutar el intercambio**
-Una vez confirmada la igualdad de datos, simplemente ejecuta la segunda migración generada:
-
+**1. Verificación previa:** Comprueba que ambas tablas tengan la misma información (`PaperTrail::Version.count == PaperTrail::Version.from('versions_partitioned').count`).
+**2. Ejecutar el intercambio:**
 ```bash
 rails db:migrate
 ```
+El helper `swap_partitioned_tables` eliminará los triggers, renombrará tu tabla vieja a `versions_legacy` (como backup) y la nueva a `versions`. 
+**¡Felicidades! Has particionado una tabla masiva sin un solo segundo de downtime.** 🚀
 
-**¿Qué ocurre internamente en la base de datos?**
-El helper `swap_partitioned_tables` abre una transacción y ejecuta tres acciones indivisibles:
-1. **Elimina los Triggers:** Detiene la sincronización en tiempo real desde la tabla original.
-2. **Resguarda la tabla legacy:** Renombra tu tabla original (ej. `versions`) a `versions_legacy`. Este será tu backup de seguridad inmediato.
-3. **Activa la particionada:** Renombra la tabla sombra (ej. `versions_partitioned`) a `versions`.
+*(Si necesitas revertir, `rails db:rollback` deshará el cambio de nombres y reactivará los triggers instantáneamente).*
 
-A partir de ese milisegundo, tu aplicación interactúa nativamente con la estructura particionada.
+---
 
-**Plan de Reversión (Rollback Seguro)**
-Si detectas algún comportamiento anómalo en tu aplicación tras el Cutover, la marcha atrás es segura e instantánea. Al ejecutar `rails db:rollback`, la gema volverá a cruzar los nombres de las tablas a su estado original y reactivará los Triggers de Live Sync automáticamente.
+## 🔍 Consultando Datos (Scopes Automáticos)
+
+Para que PostgreSQL sea extremadamente rápido en una arquitectura particionada, debe aprovechar el **Partition Pruning** (poda de particiones). Esto significa que la base de datos debe saber exactamente en qué tabla hija buscar, evitando escanear todas las demás.
+
+Para facilitarte esto, al usar la macro `partition_table` en un modelo, la gema inyecta automáticamente el scope `for_partition(valor)`.
+
+**Ejemplo de uso:**
+
+```ruby
+# ❌ Evita hacer consultas sin la clave de partición si es posible:
+Conversation.where(status: 'active') # Escaneará todas las particiones buscando activos
+
+# ✅ Forma correcta usando el scope inyectado:
+Conversation.for_partition(123).where(status: 'active')
+
+# El scope equivale a escribir:
+Conversation.where(isp_id: 123).where(status: 'active')
+```
+
+Esto garantiza que el motor de PostgreSQL vaya directamente a la tabla física `conversations_isp_123`, logrando respuestas en milisegundos sin importar cuán grande sea tu sistema global.
 
 ---
 
@@ -237,8 +241,9 @@ rake tenant_partition:cleanup
 * `.destroy!(id)`: Eliminación global de un tenant.
 * `.exists?(id)`: Verifica infraestructura global.
 
-### Macros de Modelo
+### Macros y Scopes de Modelo
 * `partition_table(key: nil)`: Activa particionamiento (opcionalmente sobreescribe la clave global).
+* `for_partition(value)`: Scope automático para filtrar por la clave de partición (ej. `where(isp_id: value)`).
 
 ### Helpers de Migraciones
 * `create_partitioned_table(table_name, **options)`
