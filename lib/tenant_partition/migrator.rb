@@ -29,7 +29,7 @@ module TenantPartition
       @ensured_partitions = Set.new
     end
 
-    def copy_data!(batch_size: 2000, order_by: :id, &block)
+    def copy_data!(batch_size: 5000, order_by: :id, &block)
       TenantPartition.log_info "MIGRATE", "Copiando #{@source_table} -> #{@target_table} (Lotes: #{batch_size})"
 
       validate_target_table!
@@ -38,18 +38,27 @@ module TenantPartition
       last_id = initial_id_value
       total_copied = 0
 
+      # Obtenemos el mapeo de columnas para el UPSERT (ON CONFLICT DO UPDATE)
+      update_mapping = update_mapping_for_target
+
       loop do
-        rows = fetch_batch(order_by, last_value, last_id, batch_size)
-        break if rows.empty?
+        # 🚀 OPTIMIZACIÓN: Solo traemos los campos de control a Ruby para ahorrar memoria
+        control_rows = fetch_control_batch(order_by, last_value, last_id, batch_size)
+        break if control_rows.empty?
 
-        block&.call(rows)
+        # Aseguramos que existan las particiones físicas para este lote
+        ensure_partitions_exist_for!(control_rows)
 
-        insert_batch(rows)
+        # Ejecutamos el movimiento de datos pesados directamente en SQL
+        batch_ids = control_rows.map { |r| r["id"] }
+        move_batch_in_sql(batch_ids, update_mapping)
 
-        last_record = rows.last
+        block&.call(control_rows) if block
+
+        last_record = control_rows.last
         last_value = last_record[order_by.to_s]
         last_id = last_record["id"]
-        total_copied += rows.size
+        total_copied += control_rows.size
 
         print "."
       end
@@ -60,43 +69,45 @@ module TenantPartition
 
     private
 
-    def validate_target_table!
-      return if model.connection.table_exists?(@target_table)
-
-      raise TenantPartition::Error, "La tabla destino '#{@target_table}' no existe."
-    end
-
-    def fetch_batch(order_column, last_value, last_id, limit)
-      sql = build_keyset_query(order_column, last_value, last_id, limit)
+    def fetch_control_batch(order_column, last_value, last_id, limit)
+      sql = build_control_query(order_column, last_value, last_id, limit)
       model.connection.select_all(sql).to_a
     end
 
-    def build_keyset_query(column, last_value, last_id, limit)
-      if column == :id
-        <<~SQL.squish
-          SELECT * FROM #{@source_table}
-          WHERE id > #{model.connection.quote(last_value)}
-          ORDER BY id ASC
-          LIMIT #{limit}
-        SQL
-      else
-        <<~SQL.squish
-          SELECT * FROM #{@source_table}
-          WHERE (#{column}, id) > (#{model.connection.quote(last_value)}, #{model.connection.quote(last_id)})
-          ORDER BY #{column} ASC, id ASC
-          LIMIT #{limit}
-        SQL
-      end
+    def build_control_query(column, last_value, last_id, limit)
+      # Solo seleccionamos ID y Partition Key
+      select_clause = "SELECT id, #{@partition_key} "
+      from_clause = "FROM #{@source_table} "
+      
+      where_clause = if column == :id
+                       "WHERE id > #{model.connection.quote(last_value)} "
+                     else
+                       "WHERE (#{column}, id) > (#{model.connection.quote(last_value)}, #{model.connection.quote(last_id)}) "
+                     end
+
+      order_clause = column == :id ? "ORDER BY id ASC " : "ORDER BY #{column} ASC, id ASC "
+      
+      "#{select_clause}#{from_clause}#{where_clause}#{order_clause}LIMIT #{limit}"
     end
 
-    def insert_batch(rows)
-      ensure_partitions_exist_for!(rows)
+    def move_batch_in_sql(ids, update_mapping)
+      quoted_ids = ids.map { |id| model.connection.quote(id) }.join(",")
+      
+      sql = <<~SQL.squish
+        INSERT INTO #{@target_table}
+        SELECT * FROM #{@source_table}
+        WHERE id IN (#{quoted_ids})
+        ON CONFLICT (id, #{@partition_key})
+        DO UPDATE SET #{update_mapping};
+      SQL
 
-      @target_model.insert_all(
-        rows,
-        unique_by: [:id, @partition_key],
-        returning: nil
-      )
+      model.connection.execute(sql)
+    end
+
+    def update_mapping_for_target
+      model.connection.columns(@source_table).map do |col|
+        "#{col.name} = EXCLUDED.#{col.name}"
+      end.join(", ")
     end
 
     def ensure_partitions_exist_for!(rows)

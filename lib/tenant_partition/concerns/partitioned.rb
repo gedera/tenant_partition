@@ -39,7 +39,12 @@ module TenantPartition
 
           # Inyectar Scopes Automáticos
           # Este scope es siempre inofensivo y útil, incluso si la tabla sigue siendo legacy.
-          scope :for_partition, ->(val) { where(resolved_key => val) }
+          scope :for_partition, ->(val) {
+            # 🚀 OPTIMIZACIÓN: Forzamos el cast del valor al tipo de la columna para asegurar el Partition Pruning.
+            # Evitamos que Postgres reciba un String para un BigInt, lo que desactivaría la poda de particiones.
+            cast_value = type_for_attribute(resolved_key).cast(val)
+            where(resolved_key => cast_value)
+          }
 
           # Inyectar lógica de infraestructura y movimiento de datos
           extend ManagementMethods
@@ -155,6 +160,15 @@ module TenantPartition
         # Ejecuta la consulta SQL pura para anexar la nueva tabla como partición.
         def execute_create_partition_sql(value)
           table_name_for_partition = partition_table_name(value)
+          
+          # 🛡️ CHEQUEO DE RENDIMIENTO: Si la partición DEFAULT tiene datos, Postgres escaneará
+          # todo el DEFAULT para asegurar que el nuevo valor no esté allí.
+          default_count = connection.select_value("SELECT count(*) FROM #{default_partition_table_name} LIMIT 1001")
+          if default_count > 1000
+            TenantPartition.log_info "WARNING", "La partición DEFAULT de #{table_name} tiene >1000 registros. " \
+                                              "Crear esta nueva partición podría bloquear la tabla durante el escaneo."
+          end
+
           sql = <<~SQL.squish
             CREATE TABLE IF NOT EXISTS #{table_name_for_partition}
             PARTITION OF #{table_name} FOR VALUES IN ('#{value}');

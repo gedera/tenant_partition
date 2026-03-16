@@ -136,11 +136,15 @@ module TenantPartition
       #
       # @param legacy_table [Symbol, String] Nombre de la tabla original (ej: :versions).
       # @param partitioned_table [Symbol, String] Nombre de la nueva tabla (ej: :versions_partitioned).
+      # @param lock_timeout [String] Tiempo máximo de espera para obtener el lock (default: 5s).
       # @return [void]
-      def swap_partitioned_tables(legacy_table, partitioned_table)
+      def swap_partitioned_tables(legacy_table, partitioned_table, lock_timeout: "5s")
         backup_name = "#{legacy_table}_legacy"
 
         transaction do
+          # 🛡️ Seguridad: Evitamos que un reporte lento bloquee el Cutover y encole todas las demás transacciones.
+          execute "SET LOCAL lock_timeout = '#{lock_timeout}';"
+          
           remove_partition_sync_trigger(legacy_table, partitioned_table)
           rename_table(legacy_table, backup_name)
           rename_table(partitioned_table, legacy_table)
