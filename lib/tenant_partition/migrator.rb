@@ -69,16 +69,26 @@ module TenantPartition
 
     private
 
+    def validate_target_table!
+      return if model.connection.table_exists?(@target_table)
+
+      raise TenantPartition::Error, "La tabla destino '#{@target_table}' no existe."
+    end
+
     def fetch_control_batch(order_column, last_value, last_id, limit)
       sql = build_control_query(order_column, last_value, last_id, limit)
       model.connection.select_all(sql).to_a
     end
 
     def build_control_query(column, last_value, last_id, limit)
-      # Solo seleccionamos ID y Partition Key
-      select_clause = "SELECT id, #{@partition_key} "
+      # 🐛 FIX: Debemos seleccionar la columna de paginación (ej: created_at)
+      # para que el script sepa desde dónde arrancar el siguiente lote.
+      fields = ["id", @partition_key.to_s]
+      fields << column.to_s unless fields.include?(column.to_s)
+
+      select_clause = "SELECT #{fields.join(', ')} "
       from_clause = "FROM #{@source_table} "
-      
+
       where_clause = if column == :id
                        "WHERE id > #{model.connection.quote(last_value)} "
                      else
@@ -86,13 +96,13 @@ module TenantPartition
                      end
 
       order_clause = column == :id ? "ORDER BY id ASC " : "ORDER BY #{column} ASC, id ASC "
-      
+
       "#{select_clause}#{from_clause}#{where_clause}#{order_clause}LIMIT #{limit}"
     end
 
     def move_batch_in_sql(ids, update_mapping)
       quoted_ids = ids.map { |id| model.connection.quote(id) }.join(",")
-      
+
       sql = <<~SQL.squish
         INSERT INTO #{@target_table}
         SELECT * FROM #{@source_table}
@@ -130,13 +140,33 @@ module TenantPartition
       safe_pid = str_pid.length > 10 ? Digest::MD5.hexdigest(str_pid)[0..7] : str_pid.gsub("-", "_")
 
       partition_name = "#{@target_table}_#{suffix}_#{safe_pid}"
+      default_partition = "#{@target_table}_default"
 
-      sql = <<~SQL.squish
-        CREATE TABLE IF NOT EXISTS #{partition_name}
-        PARTITION OF #{@target_table} FOR VALUES IN ('#{pid}');
-      SQL
+      model.connection.transaction do
+        # 1. Extraemos y borramos temporalmente los datos "vivos" que cayeron en el DEFAULT.
+        # Al usar RETURNING * obtenemos las filas completas en un solo paso.
+        quoted_pid = model.connection.quote(pid)
+        conflicting_rows = model.connection.select_all(
+          "DELETE FROM #{default_partition} WHERE #{@partition_key} = #{quoted_pid} RETURNING *"
+        ).to_a
 
-      model.connection.execute(sql)
+        # 2. Ahora que Postgres ve que no hay violaciones en el DEFAULT, creamos la partición
+        sql = <<~SQL.squish
+          CREATE TABLE IF NOT EXISTS #{partition_name}
+          PARTITION OF #{@target_table} FOR VALUES IN (#{quoted_pid});
+        SQL
+        model.connection.execute(sql)
+
+        # 3. Re-insertamos los datos "vivos" (Postgres ahora los enrutará a la nueva tabla)
+        if conflicting_rows.any?
+          @target_model.insert_all(
+            conflicting_rows,
+            unique_by: [:id, @partition_key],
+            returning: nil
+          )
+          TenantPartition.log_info "RECOVER", "Se movieron #{conflicting_rows.size} registros vivos desde DEFAULT hacia #{partition_name}"
+        end
+      end
     end
 
     def initial_value_for(order_by)
