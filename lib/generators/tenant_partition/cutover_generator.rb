@@ -55,8 +55,14 @@ module TenantPartition
       # una vez que el generador termina de ejecutarse exitosamente.
       #
       # @return [void]
+      # Muestra en consola las instrucciones críticas y advertencias de seguridad
+      # forzando la interpolación ERB para una mejor experiencia de usuario.
       def show_readme
-        readme "CUTOVER_README" if behavior == :invoke
+        if behavior == :invoke
+          template_path = File.join(self.class.source_root, "CUTOVER_README")
+          parsed_readme = ERB.new(File.read(template_path)).result(binding)
+          puts "\n#{parsed_readme}\n"
+        end
       end
 
       private

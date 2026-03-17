@@ -5,15 +5,18 @@ Has generado la migración final de intercambio atómico.
 
 ⚠️  ¡ALTO! ANTES DE DESPLEGAR A PRODUCCIÓN ⚠️
 Asegúrate de que el proceso de Backfill masivo haya terminado al 100%.
-Puedes verificarlo desde la consola de Rails (`rails c`) en producción:
+Puedes verificarlo reemplazando "Model" por tu clase real (ej. PaperTrail::Version) 
+y ejecutando esto en tu consola de Rails (`rails c`):
 
   Model.count == Model.from('<%= table_name %>_partitioned').count
 
-Si los números coinciden:
+Si te devuelve `true`, los números coinciden:
 1. Sube este código y ejecuta la migración en Producción (Despliegue 2).
-   Esto hará el intercambio atómico en 1 milisegundo.
-2. Finalmente, agrega la macro `partition_table` a tu modelo
-   ActiveRecord para activar las bondades de la gema.
+   Esto hará el intercambio atómico de Postgres en 1 milisegundo.
+
+2. ¡Listo! En el próximo reinicio de los servidores, tu modelo
+   detectará el cambio en la base de datos y activará automáticamente
+   sus superpoderes gracias a la Introspección Dinámica.
 
 ¡Felicidades por lograr una migración Zero-Downtime perfecta!
 ===============================================================================
