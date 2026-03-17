@@ -1,0 +1,12 @@
+===============================================================================
+🪄 ¡Fase 1: Preparación Online Generada!
+
+1. Revisa el archivo de migración generado en db/migrate/.
+2. Sube este código a tu repositorio y despliega en Producción (Despliegue 1).
+3. Con la nueva tabla sombra ya creada en BD, ejecuta el Backfill histórico:
+   `rake tenant_partition:backfill_data[MiModelo,mi_tabla_partitioned]`
+
+Una vez que el copiado llegue al 100%, podrás generar el intercambio final
+con el comando de Fase 2:
+`rails g tenant_partition:cutover nombre_tabla partition_key`
+===============================================================================

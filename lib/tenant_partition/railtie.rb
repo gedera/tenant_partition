@@ -16,7 +16,9 @@ module TenantPartition
     rake_tasks do
       # Usamos expand_path para asegurar que la ruta sea absoluta respecto a la gema,
       # evitando errores de "file not found" dependiendo de dónde se ejecute el comando.
-      load File.expand_path("tasks/maintenance.rake", __dir__)
+      Dir[File.expand_path("tasks/*.rake", __dir__)].each do |file|
+        load file
+      end
     end
 
     # Inicializador que se ejecuta cuando Rails carga los componentes de ActiveRecord.
@@ -30,7 +32,7 @@ module TenantPartition
         # Validación de seguridad:
         # Solo inyectamos el módulo si el adaptador configurado es efectivamente PostgreSQL.
         # Esto previene errores si la gema se instala en proyectos con MySQL o SQLite.
-        if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter) && connection_db_config.adapter == "postgresql"
+        if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter)
           ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.include TenantPartition::Schema::Statements
         end
       end

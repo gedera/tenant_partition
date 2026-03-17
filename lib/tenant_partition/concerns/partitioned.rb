@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require_relative "data_mover"
 
 module TenantPartition
@@ -8,12 +9,17 @@ module TenantPartition
     #
     # Al incluir este concern en ApplicationRecord, los modelos obtienen acceso a la macro
     # {.partition_table}, la cual activa la lógica de partición, configura la clave primaria
-    # compuesta y añade métodos de gestión de tablas (DDL).
+    # compuesta (solo si es seguro) y añade métodos de gestión de tablas (DDL).
     module Partitioned
       extend ActiveSupport::Concern
 
       class_methods do
         # Macro para activar el particionamiento en el modelo actual.
+        #
+        # Incluye introspección inteligente: verifica en PostgreSQL si la tabla física
+        # realmente está particionada antes de alterar el comportamiento nativo de Rails.
+        # Esto permite despliegues Zero-Downtime seguros, donde el código puede ser
+        # desplegado antes de que finalice la migración de base de datos.
         #
         # @example Activar partición por ISP
         #   class Conversation < ApplicationRecord
@@ -28,18 +34,38 @@ module TenantPartition
           # Guardamos la key en una variable de instancia de clase para acceso rápido
           @partition_key_column = resolved_key
 
-          # Registrar este modelo en el sistema
+          # Registrar este modelo en el sistema global
           TenantPartition.register_model(self)
 
-          # Configurar Primary Key Compuesta (Soporte Rails 7.1+)
-          self.primary_key = [:id, resolved_key]
-
           # Inyectar Scopes Automáticos
-          scope :for_partition, ->(val) { where(resolved_key => val) }
+          # Este scope es siempre inofensivo y útil, incluso si la tabla sigue siendo legacy.
+          scope :for_partition, ->(val) {
+            # 🚀 OPTIMIZACIÓN: Forzamos el cast del valor al tipo de la columna para asegurar el Partition Pruning.
+            # Evitamos que Postgres reciba un String para un BigInt, lo que desactivaría la poda de particiones.
+            cast_value = type_for_attribute(resolved_key).cast(val)
+            where(resolved_key => cast_value)
+          }
 
           # Inyectar lógica de infraestructura y movimiento de datos
           extend ManagementMethods
           include TenantPartition::Concerns::DataMover
+
+          # 🪄 INTROSPECCIÓN DINÁMICA: Adaptación al entorno
+          begin
+            # 'p' en pg_class.relkind significa "Partitioned table" nativa en Postgres.
+            is_partitioned = connection.select_value(
+              "SELECT relkind FROM pg_class WHERE relname = '#{table_name}'"
+            ) == "p"
+
+            # Solo activamos la Primary Key Compuesta si la tabla ya hizo el Cutover real en BD.
+            # Además, verificamos que Rails sea 7.1 o superior (Rails 6 no lo soporta nativamente).
+            if is_partitioned && ActiveRecord.version >= Gem::Version.new("7.1.0")
+              self.primary_key = [:id, resolved_key]
+            end
+          rescue ActiveRecord::StatementInvalid, ActiveRecord::ConnectionNotEstablished
+            # Ignoramos silenciosamente si la BD no está lista (ej. durante rake assets:precompile,
+            # construcción de imágenes Docker, o antes de correr db:create).
+          end
         end
 
         # Devuelve el nombre de la columna usada para particionar este modelo.
@@ -65,7 +91,7 @@ module TenantPartition
         end
 
         # Elimina (DROP) la partición asociada al valor dado.
-        # Realiza un DETACH primero para seguridad y luego DROP.
+        # Realiza un DETACH primero para mayor seguridad en transacciones y luego DROP.
         #
         # @param value [String, Integer] El valor del tenant.
         # @return [void]
@@ -81,21 +107,26 @@ module TenantPartition
         end
 
         # Genera el nombre de la tabla física para una partición específica.
+        # Utiliza Hashing Inteligente para evitar el límite de 63 caracteres de PostgreSQL.
         #
         # @param value [Object] El valor del tenant.
-        # @return [String] Nombre de la tabla (ej: 'conversations_isp_1').
+        # @return [String] Nombre de la tabla (ej: 'conversations_isp_1' o 'conversations_isp_a1b2c3d4').
         def partition_table_name(value)
-          sanitized_value = value.to_s.gsub("-", "_")
+          str_value = value.to_s
+
+          # Si es largo (UUID), hasheamos a 8 caracteres. Si es corto (Integer), lo dejamos legible.
+          safe_value = str_value.length > 10 ? Digest::MD5.hexdigest(str_value)[0..7] : str_value.gsub("-", "_")
+
           suffix = partition_key_column.to_s.gsub("_id", "")
 
-          # Formato: nombre_tabla_sufijo_valor
-          "#{table_name}_#{suffix}_#{sanitized_value}"
+          # Formato estricto interno: nombre_tabla_sufijo_valor_seguro
+          "#{table_name}_#{suffix}_#{safe_value}"
         end
 
         # Verifica si la tabla de la partición existe en el catálogo de PostgreSQL.
         #
         # @param value [Object] El valor del tenant.
-        # @return [Boolean]
+        # @return [Boolean] true si la tabla hija existe y está anexada.
         def partition_table_exists?(value)
           child_table = partition_table_name(value)
 
@@ -109,7 +140,45 @@ module TenantPartition
           connection.execute(sql).any?
         end
 
-        # Nombre de la tabla DEFAULT (para valores que no caen en ninguna partición).
+        # Devuelve un listado de todos los nombres de las tablas físicas
+        # que actualmente son particiones hijas de este modelo.
+        #
+        # @return [Array<String>] Lista de nombres de tablas (ej: ["versions_isp_a1b2", "versions_default"])
+        def partitions
+          sql = <<~SQL.squish
+            SELECT c.relname
+            FROM pg_class c
+            JOIN pg_inherits i ON c.oid = i.inhrelid
+            JOIN pg_class p ON i.inhparent = p.oid
+            WHERE p.relname = '#{table_name}';
+          SQL
+
+          connection.select_values(sql)
+        end
+
+        # Devuelve un array con los valores (Tenants) que actualmente
+        # tienen una partición física aprovisionada en PostgreSQL.
+        # Utiliza introspección del catálogo para obtener el valor exacto definido en la regla.
+        #
+        # @return [Array<String>] Lista de valores (ej: ["101", "a1b2c3d4"])
+        def partition_values
+          sql = <<~SQL.squish
+            SELECT pg_get_expr(c.relpartbound, c.oid, true) as partition_expression
+            FROM pg_class c
+            JOIN pg_inherits i ON c.oid = i.inhrelid
+            JOIN pg_class p ON i.inhparent = p.oid
+            WHERE p.relname = '#{table_name}';
+          SQL
+
+          connection.select_values(sql).filter_map do |expr|
+            next if expr == "DEFAULT"
+
+            # Extraemos el valor entre comillas simples de la expresión "FOR VALUES IN ('value')"
+            expr.match(/FOR VALUES IN \('(.+)'\)/)&.captures&.first
+          end
+        end
+
+        # Nombre de la tabla DEFAULT (para valores que no caen en ninguna partición aprovisionada).
         # @return [String]
         def default_partition_table_name
           "#{table_name}_default"
@@ -117,6 +186,7 @@ module TenantPartition
 
         private
 
+        # Genera el payload de metadatos para la instrumentación (ActiveSupport::Notifications).
         def create_partition_payload(value)
           {
             partition_key: partition_key_column,
@@ -125,8 +195,18 @@ module TenantPartition
           }
         end
 
+        # Ejecuta la consulta SQL pura para anexar la nueva tabla como partición.
         def execute_create_partition_sql(value)
           table_name_for_partition = partition_table_name(value)
+
+          # 🛡️ CHEQUEO DE RENDIMIENTO: Si la partición DEFAULT tiene datos, Postgres escaneará
+          # todo el DEFAULT para asegurar que el nuevo valor no esté allí.
+          default_count = connection.select_value("SELECT count(*) FROM #{default_partition_table_name} LIMIT 1001")
+          if default_count > 1000
+            TenantPartition.log_info "WARNING", "La partición DEFAULT de #{table_name} tiene >1000 registros. " \
+                                              "Crear esta nueva partición podría bloquear la tabla durante el escaneo."
+          end
+
           sql = <<~SQL.squish
             CREATE TABLE IF NOT EXISTS #{table_name_for_partition}
             PARTITION OF #{table_name} FOR VALUES IN ('#{value}');

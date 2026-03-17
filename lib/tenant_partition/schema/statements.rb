@@ -1,3 +1,4 @@
+
 # frozen_string_literal: true
 
 module TenantPartition
@@ -18,13 +19,136 @@ module TenantPartition
 
         raise TenantPartition::Error, "Falta 'partition_key'." unless key
 
-        configure_pk_and_options(options, key)
+        options[:id] = false
+        options.delete(:primary_key) # Removido para evadir el parseo roto de Rails 6
+        options[:options] = "PARTITION BY LIST (#{key})"
 
         create_table(table_name, **options) do |t|
           setup_partitioning(t, key, id_type, block)
         end
 
+        # 🪄 MAGIA PARA RAILS 6: Forzamos la Primary Key Compuesta a nivel de PostgreSQL
+        execute "ALTER TABLE #{table_name} ADD PRIMARY KEY (id, #{key});"
+
+        # Agregamos un índice único explícito para que el insert_all de Rails lo detecte sin quejarse
+        add_index table_name, [:id, key], unique: true
+
         create_default_partition(table_name)
+      end
+
+      # Crea una tabla particionada copiando dinámicamente la estructura de una tabla existente.
+      #
+      # @param target_table [Symbol, String] Nombre de la nueva tabla particionada.
+      # @param source_table [Symbol, String] Nombre de la tabla legacy a copiar.
+      # @param sync_triggers [Boolean] Si es true, instala los triggers de Live Sync automáticamente.
+      # @param options [Hash] Opciones adicionales (ej: partition_key, id_type).
+      def create_partitioned_table_from(target_table, source_table, sync_triggers: false, **options, &block)
+        key = options[:partition_key] || TenantPartition.configuration&.partition_key
+        raise TenantPartition::Error, "Falta 'partition_key'." unless key
+
+        # 1. Creamos la tabla usando nuestro helper core
+        create_partitioned_table(target_table, **options) do |t|
+
+          # 2. Introspección: Leemos las columnas de la tabla vieja
+          ActiveRecord::Base.connection.columns(source_table).each do |col|
+            # 🪄 CAMBIO CLAVE: Ya NO omitimos la partition_key.
+            # Solo omitimos el 'id', para que la partition_key se copie con
+            # su tipo original exacto (UUID o Integer) desde la tabla legacy.
+            next if col.name == "id"
+
+            # Recreamos la columna con sus propiedades exactas
+            t.column col.name, col.type,
+                     limit: col.limit,
+                     precision: col.precision,
+                     scale: col.scale,
+                     default: col.default,
+                     null: col.null
+          end
+
+          # Permitimos al usuario pasar un bloque opcional para agregar índices
+          block.call(t) if block
+        end
+
+        # 3. Opcional: Instalamos los Triggers en un solo paso
+        create_partition_sync_trigger(source_table, target_table, key) if sync_triggers
+      end
+
+      # Crea un trigger de sincronización en tiempo real (Live Sync) mediante UPSERT.
+      # Replica de forma atómica los eventos INSERT, UPDATE y DELETE desde una tabla
+      # origen (legacy) hacia una tabla destino (particionada sombra).
+      #
+      # @param source_table [Symbol, String] Nombre de la tabla original.
+      # @param target_table [Symbol, String] Nombre de la nueva tabla particionada.
+      # @param partition_key [Symbol, String] Columna utilizada como clave de partición.
+      # @return [void]
+      def create_partition_sync_trigger(source_table, target_table, partition_key)
+        func_name = "trigger_sync_#{source_table}_to_#{target_table}"
+        trigger_name = "sync_#{source_table}_data"
+
+        # Mapeo seguro: "col1 = EXCLUDED.col1, col2 = EXCLUDED.col2"
+        update_mapping = update_mapping_for(source_table)
+
+        execute <<~SQL.squish
+          CREATE OR REPLACE FUNCTION #{func_name}() RETURNS TRIGGER AS $$
+          BEGIN
+            IF (TG_OP = 'DELETE') THEN
+              DELETE FROM #{target_table} WHERE id = OLD.id;
+              RETURN OLD;
+            ELSIF (TG_OP = 'UPDATE') THEN
+              INSERT INTO #{target_table} VALUES (NEW.*)
+              ON CONFLICT (id, #{partition_key})
+              DO UPDATE SET #{update_mapping};
+              RETURN NEW;
+            ELSIF (TG_OP = 'INSERT') THEN
+              INSERT INTO #{target_table} VALUES (NEW.*)
+              ON CONFLICT (id, #{partition_key})
+              DO UPDATE SET #{update_mapping};
+              RETURN NEW;
+            END IF;
+            RETURN NULL;
+          END;
+          $$ LANGUAGE plpgsql;
+        SQL
+
+        execute <<~SQL.squish
+          DROP TRIGGER IF EXISTS #{trigger_name} ON #{source_table};
+          CREATE TRIGGER #{trigger_name}
+          AFTER INSERT OR UPDATE OR DELETE ON #{source_table}
+          FOR EACH ROW EXECUTE FUNCTION #{func_name}();
+        SQL
+      end
+
+      # Elimina la función y el trigger de sincronización creados por {#create_partition_sync_trigger}.
+      #
+      # @param source_table [Symbol, String] Nombre de la tabla original.
+      # @param target_table [Symbol, String] Nombre de la nueva tabla particionada.
+      # @return [void]
+      def remove_partition_sync_trigger(source_table, target_table)
+        func_name = "trigger_sync_#{source_table}_to_#{target_table}"
+        trigger_name = "sync_#{source_table}_data"
+
+        execute "DROP TRIGGER IF EXISTS #{trigger_name} ON #{source_table};"
+        execute "DROP FUNCTION IF EXISTS #{func_name}();"
+      end
+
+      # Realiza el intercambio (Cutover) atómico entre la tabla legacy y la particionada.
+      # Elimina los triggers y cruza los nombres de las tablas sin detener la base de datos.
+      #
+      # @param legacy_table [Symbol, String] Nombre de la tabla original (ej: :versions).
+      # @param partitioned_table [Symbol, String] Nombre de la nueva tabla (ej: :versions_partitioned).
+      # @param lock_timeout [String] Tiempo máximo de espera para obtener el lock (default: 5s).
+      # @return [void]
+      def swap_partitioned_tables(legacy_table, partitioned_table, lock_timeout: "5s")
+        backup_name = "#{legacy_table}_legacy"
+
+        transaction do
+          # 🛡️ Seguridad: Evitamos que un reporte lento bloquee el Cutover y encole todas las demás transacciones.
+          execute "SET LOCAL lock_timeout = '#{lock_timeout}';"
+          
+          remove_partition_sync_trigger(legacy_table, partitioned_table)
+          rename_table(legacy_table, backup_name)
+          rename_table(partitioned_table, legacy_table)
+        end
       end
 
       # Elimina una tabla particionada en cascada.
@@ -37,16 +161,13 @@ module TenantPartition
 
       # Configura las columnas y definiciones dentro del bloque create_table.
       def setup_partitioning(table, key, id_type, block)
-        # Definimos la ID según la preferencia del usuario
         if id_type == :uuid
           table.uuid :id, null: false, default: -> { "gen_random_uuid()" }
         else
           table.bigserial :id, null: false
         end
 
-        # Ejecutamos el bloque del usuario (definición de columnas adicionales)
         block.call(table)
-
         ensure_partition_column(table, key)
       end
 
@@ -61,18 +182,24 @@ module TenantPartition
       def ensure_partition_column(table, key)
         return if table.columns.any? { |c| c.name == key.to_s }
 
-        # Si no la definió, la creamos (asumiendo integer por defecto para claves foráneas típicas)
-        # Si el usuario quiere un UUID como partition key, debería definirlo explícitamente en el bloque.
         table.integer key, null: false
       end
 
       # Crea la tabla _default para capturar datos sin partición asignada.
       def create_default_partition(table_name)
         default_name = "#{table_name}_default"
-        execute <<-SQL.squish
+        execute <<~SQL.squish
           CREATE TABLE IF NOT EXISTS #{default_name}
           PARTITION OF #{table_name} DEFAULT;
         SQL
+      end
+
+      # Genera el mapeo explícito de columnas para el UPSERT.
+      # Utiliza EXCLUDED, que es la pseudo-tabla de Postgres que contiene la fila conflictiva.
+      def update_mapping_for(table_name)
+        ActiveRecord::Base.connection.columns(table_name).map do |col|
+          "#{col.name} = EXCLUDED.#{col.name}"
+        end.join(", ")
       end
     end
   end

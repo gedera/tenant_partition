@@ -14,7 +14,7 @@ Gem::Specification.new do |spec|
                      "tenants y migraciones zero-downtime."
   spec.homepage = "https://github.com/gedera/tenant_partition"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = ">= 2.7.0"
 
   spec.metadata["source_code_uri"] = "https://github.com/gedera/tenant_partition"
   spec.metadata["changelog_uri"] = "https://github.com/gedera/tenant_partition/blob/main/CHANGELOG.md"
@@ -31,6 +31,6 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   # Dependencies sorted alphabetically
-  spec.add_dependency "activemodel", ">= 7.1"
-  spec.add_dependency "activerecord", ">= 7.1"
+  spec.add_dependency "activemodel", ">= 6.0"
+  spec.add_dependency "activerecord", ">= 6.0"
 end
