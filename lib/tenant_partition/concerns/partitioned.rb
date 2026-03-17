@@ -156,6 +156,28 @@ module TenantPartition
           connection.select_values(sql)
         end
 
+        # Devuelve un array con los valores (Tenants) que actualmente
+        # tienen una partición física aprovisionada en PostgreSQL.
+        # Utiliza introspección del catálogo para obtener el valor exacto definido en la regla.
+        #
+        # @return [Array<String>] Lista de valores (ej: ["101", "a1b2c3d4"])
+        def partition_values
+          sql = <<~SQL.squish
+            SELECT pg_get_expr(c.relpartbound, c.oid, true) as partition_expression
+            FROM pg_class c
+            JOIN pg_inherits i ON c.oid = i.inhrelid
+            JOIN pg_class p ON i.inhparent = p.oid
+            WHERE p.relname = '#{table_name}';
+          SQL
+
+          connection.select_values(sql).filter_map do |expr|
+            next if expr == "DEFAULT"
+
+            # Extraemos el valor entre comillas simples de la expresión "FOR VALUES IN ('value')"
+            expr.match(/FOR VALUES IN \('(.+)'\)/)&.captures&.first
+          end
+        end
+
         # Nombre de la tabla DEFAULT (para valores que no caen en ninguna partición aprovisionada).
         # @return [String]
         def default_partition_table_name

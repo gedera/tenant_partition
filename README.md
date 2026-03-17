@@ -231,8 +231,10 @@ rake tenant_partition:cleanup
 
 **Macros de Modelo**
 * `partition_table(key: nil)`: Activa particionamiento (opcional: sobreescribe clave).
-* `for_partition(value)`: Scope de búsqueda optimizada.
+* `for_partition(value)`: Scope de búsqueda optimizada (con auto-casteo de tipos).
 * `create_partition(value)`, `drop_partition(value)`: Operaciones DDL manuales por modelo.
+* `partitions`: Devuelve nombres de tablas físicas hijas (incluyendo `_default`).
+* `partition_values`: Devuelve los IDs/valores de tenants que ya tienen partición.
 
 **Helpers de Migraciones**
 * `create_partitioned_table(table_name, **options)`
