@@ -140,6 +140,22 @@ module TenantPartition
           connection.execute(sql).any?
         end
 
+        # Devuelve un listado de todos los nombres de las tablas físicas
+        # que actualmente son particiones hijas de este modelo.
+        #
+        # @return [Array<String>] Lista de nombres de tablas (ej: ["versions_isp_a1b2", "versions_default"])
+        def partitions
+          sql = <<~SQL.squish
+            SELECT c.relname
+            FROM pg_class c
+            JOIN pg_inherits i ON c.oid = i.inhrelid
+            JOIN pg_class p ON i.inhparent = p.oid
+            WHERE p.relname = '#{table_name}';
+          SQL
+
+          connection.select_values(sql)
+        end
+
         # Nombre de la tabla DEFAULT (para valores que no caen en ninguna partición aprovisionada).
         # @return [String]
         def default_partition_table_name
@@ -160,7 +176,7 @@ module TenantPartition
         # Ejecuta la consulta SQL pura para anexar la nueva tabla como partición.
         def execute_create_partition_sql(value)
           table_name_for_partition = partition_table_name(value)
-          
+
           # 🛡️ CHEQUEO DE RENDIMIENTO: Si la partición DEFAULT tiene datos, Postgres escaneará
           # todo el DEFAULT para asegurar que el nuevo valor no esté allí.
           default_count = connection.select_value("SELECT count(*) FROM #{default_partition_table_name} LIMIT 1001")
